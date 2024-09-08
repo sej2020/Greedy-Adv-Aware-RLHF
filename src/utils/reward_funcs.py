@@ -23,4 +23,4 @@ def normalize_reward(reward: Float[Tensor, "batch_size"], eps=1e-5) -> Float[Ten
     '''
     Normalizes the reward function values over the batch of sequences.
     '''
-    return (reward - reward.mean()) / (reward.std() + eps)
+    return (reward - reward.mean()) / (reward.std() + eps), reward.mean(), reward.std()

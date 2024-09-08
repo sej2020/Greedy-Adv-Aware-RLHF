@@ -95,13 +95,51 @@ def calc_clipped_surrogate_objective(
     assert logprobs.shape == mb_logprobs.shape == mb_advantages.shape,\
         f"Shape mismatch: {logprobs.shape=}, {mb_logprobs.shape=}, {mb_advantages.shape=}. Did you create logprobs using 'get_logprobs' correctly?"
     logits_diff = logprobs - mb_logprobs
-    # print(logits_diff, flush=True)
-
+    
+    # [batch, gen_len]
     r_theta = t.exp(logits_diff)
 
+    # [batch, gen_len]
     mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + eps)
 
     non_clipped = r_theta * mb_advantages
     clipped = t.clip(r_theta, 1-clip_coef, 1+clip_coef) * mb_advantages
+    return t.minimum(non_clipped, clipped).mean()
 
+
+def calc_greedy_clipped_surrogate_objective(
+    logprobs: Float[Tensor, "minibatch_size gen_len"],
+    mb_logprobs: Float[Tensor, "minibatch_size gen_len"],
+    mb_advantages: Float[Tensor, "minibatch_size gen_len"],
+    mb_greedy_advantages: Float[Tensor, "minibatch_size gen_len"],
+    clip_coef: float,
+    eps: float = 1e-8,
+) -> Float[Tensor, ""]:
+    '''Return the clipped surrogate objective, suitable for maximisation with gradient ascent.
+
+    logprobs:
+        the logprobs of the action taken by the agent, according to the new policy
+    mb_logprobs:
+        logprobs of the actions taken in the sampled minibatch (according to the old policy)
+    mb_advantages:
+        advantages calculated from the sampled minibatch
+    mb_greedy_advantages:
+        greedy advantages calculated from the sampled minibatch
+    clip_coef:
+        amount of clipping, denoted by epsilon in Eq 7.
+    eps:
+        used to add to std dev of mb_advantages when normalizing (to avoid dividing by zero)
+    '''
+    assert logprobs.shape == mb_logprobs.shape == mb_advantages.shape,\
+        f"Shape mismatch: {logprobs.shape=}, {mb_logprobs.shape=}, {mb_advantages.shape=}. Did you create logprobs using 'get_logprobs' correctly?"
+    logits_diff = logprobs - mb_logprobs
+    
+    # [batch, gen_len]
+    r_theta = t.exp(logits_diff)
+
+    # [batch, gen_len]
+    mb_greedy_advantages = (mb_greedy_advantages - mb_advantages.mean()) / (mb_advantages.std() + eps)
+
+    non_clipped = r_theta * mb_greedy_advantages
+    clipped = t.clip(r_theta, 1-clip_coef, 1+clip_coef) * mb_greedy_advantages
     return t.minimum(non_clipped, clipped).mean()

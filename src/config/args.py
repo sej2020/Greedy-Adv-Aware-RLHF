@@ -2,7 +2,7 @@ import torch as t
 from typing import Optional, Callable
 from dataclasses import dataclass
 
-from utils.reward_funcs import reward_fn_char_count
+from src.utils.reward_funcs import reward_fn_char_count
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
