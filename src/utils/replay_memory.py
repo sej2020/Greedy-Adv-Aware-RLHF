@@ -61,7 +61,8 @@ class ReplayMemory:
         minibatches = []
 
         returns = self.advantages + self.values[:, -self.args.gen_len-1:-1]
-        greedy_returns = self.greedy_advantages + self.greedy_values[:, -self.args.gen_len-1:-1]
+        if self.greedy_advantages is not None:
+            greedy_returns = self.greedy_advantages + self.greedy_values[:, -self.args.gen_len-1:-1]
 
         for _ in range(self.args.batches_per_learning_phase):
 

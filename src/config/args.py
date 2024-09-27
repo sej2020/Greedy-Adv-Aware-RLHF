@@ -2,7 +2,7 @@ import torch as t
 from typing import Optional, Callable
 from dataclasses import dataclass
 
-from src.utils.reward_funcs import reward_fn_char_count
+from src.utils.reward_funcs import *
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
@@ -10,17 +10,17 @@ device = t.device("cuda" if t.cuda.is_available() else "cpu")
 class RLHFTrainingArgs():
 
     # Basic / global
-    seed: int = 1
+    seed: int = t.randint(0, 100000, (1,)).item()
     cuda: bool = t.cuda.is_available()
 
     # Wandb / logging
-    exp_name: str = "RLHF_Implementation"
-    wandb_project_name: Optional[str] = "ch2-day4-rlhf"
+    exp_name: str = "Antihack"
+    wandb_project_name: Optional[str] = "RFN_Study"
     wandb_entity: Optional[str] = None  
     use_wandb: bool = False
 
     # Duration of different phases
-    total_phases: int = 200
+    total_phases: int = 250
     batch_size: int = 256
     num_minibatches: int = 4
     batches_per_learning_phase: int = 2
@@ -45,7 +45,7 @@ class RLHFTrainingArgs():
 
     # Extra stuff for RLHF
     kl_coef: float = 1.0
-    reward_fn: Callable = reward_fn_char_count
+    reward_fn: Callable = rfn_sentiment_uncapped
     normalize_reward: bool = True
 
     def __post_init__(self):

@@ -15,6 +15,8 @@ from src.models.transformers import TransformerWithValueHead
 from src.utils.reward_funcs import normalize_reward
 from src.utils.replay_memory import ReplayMemory, ReplayMinibatch
 from src.utils.metrics import calc_clipped_surrogate_objective, calc_value_function_loss, calc_kl_penalty, calc_entropy_bonus, calc_greedy_clipped_surrogate_objective
+from src.utils.sharpness import ev_ratio, loss_landscape
+from src.utils.reward_funcs import *
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
@@ -187,7 +189,7 @@ class AntiHackRLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch):
+    def compute_rlhf_objective(self, mb: ReplayMinibatch, reported: str= "both", alt_model: TransformerWithValueHead=None):
         '''
         Computes the RLHF objective function to maximize, which equals the PPO objective function minus
         the KL penalty term.
@@ -197,7 +199,11 @@ class AntiHackRLHFTrainer:
             - Get the logprobs of the minibatch actions taken
             - Use this data to compute all 4 terms of the RLHF objective function, and create function
         '''
-        logits, values = self.model(mb.sample_ids)
+        assert reported in set(("J", "J_greedy", "both")), "Please choose one of 'J', 'J_greedy', or 'both' to report."
+        if alt_model:
+            logits, values = alt_model(mb.sample_ids)
+        else:
+            logits, values = self.model(mb.sample_ids)
         values = values[: , self.prefix_len-1:-1]
         new_logprobs = get_logprobs(logits, mb.sample_ids, prefix_len=self.prefix_len)
         old_logprobs = mb.logprobs
@@ -206,9 +212,10 @@ class AntiHackRLHFTrainer:
         kl = calc_kl_penalty(logits, mb.ref_logits, self.args.kl_coef, self.prefix_len)
         eb = calc_entropy_bonus(logits, self.args.ent_coef, self.prefix_len)
         J = cso - vfl + eb - kl
-
-        cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
-        J_greedy = cso_greedy - vfl + eb - kl
+        
+        if reported != "J":
+            cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
+            J_greedy = cso_greedy - vfl + eb - kl
 
         with t.inference_mode():
             logratio = new_logprobs - old_logprobs
@@ -218,17 +225,22 @@ class AntiHackRLHFTrainer:
             total_steps = self.step,
             learning_rate = self.scheduler.get_last_lr()[0],
             clipped_surrogate_objective = cso.item(),
-            calc_greedy_clipped_surrogate_objective = cso_greedy.item(),
+            calc_greedy_clipped_surrogate_objective = cso_greedy.item() if reported != "J" else None,
             clipfrac = np.mean(clipfracs),
             value_loss = vfl.item(),
             values = values.mean().item(),
             entropy_bonus = eb.item(),
             kl_penalty = kl.item(),
             ppo_objective_fn = J.item(),
-            ppo_objective_fn_greedy = J_greedy.item(),
+            ppo_objective_fn_greedy = J_greedy.item() if reported != "J" else None,
         ), step=self.step)
 
-        return J, J_greedy
+        if reported == "J":
+            return J
+        elif reported == "J_greedy":
+            return J_greedy
+        else:
+            return J, J_greedy
 
     def rollout_phase(self) -> ReplayMemory:
         '''
@@ -318,34 +330,42 @@ class AntiHackRLHFTrainer:
         '''
         minibatches = memory.get_minibatches()
         for mb in minibatches:
+            self.optimizer.zero_grad()
             J, J_greedy = self.compute_rlhf_objective(mb)
             
             # eta = average probability of greedy selection in minibatch
             eta = mb.greedy_logprobs.exp().mean()
             # sigma = mb.greedy_advantages - mb.advantages converted to std in terms of regular advantages
-            sigma = (((mb.greedy_advantages - mb.advantages) - mb.advantages.mean()) / ((mb.advantages).std() + 1e-5)).mean()
-            sigma = sigma.clamp(0, 2)
-            a = (1-eta)*(sigma/2 + 1) + eta*(1 - sigma/2)**10
-            b = (1-eta)*(-sigma/2) + eta*((1 - sigma/2)**10 -1)
+            sigma = ((mb.greedy_advantages - mb.advantages) / ((mb.advantages).std() + 1e-5)).mean()
+            sigma = sigma.clamp(0, 1)
+            a = (1-eta)*(sigma + 1) + eta*(1 - sigma)**10
+            b = (1-eta)*(-sigma) + eta*((1 - sigma)**10 -1)
 
             # due to multiplication commutativity
-            J = a*J
-            J_greedy = b*J_greedy
+            # J = a*J
+            # J_greedy = b*J_greedy
 
-            J.backward(retain_graph=True)
-            J_greedy.backward()
+            # J.backward(retain_graph=True)
+            J.backward()
+            # J_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            
+            # J_greedy.backward()
+            # J_plus_J_greedy_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            # J_greedy_gradients = J_plus_J_greedy_gradients - J_gradients
+
             nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
             self.optimizer.step()
-            self.optimizer.zero_grad()
+
             self.step += 1
             if self.args.use_wandb:
                 wandb.log({
-                    "objective": J,
-                    "objective_greedy": J_greedy,
                     "a": a,
                     "b": b,
                     "eta": eta,
-                    "sigma": sigma
+                    "sigma": sigma,
+                    "advantages": mb.advantages.mean().item(),
+                    "greedy_advantages": mb.greedy_advantages.mean().item(),
+                    # "gradient_cosine": t.cosine_similarity(J_gradients, J_greedy_gradients, dim=0).item(),
                     })   
 
         
@@ -370,6 +390,14 @@ class AntiHackRLHFTrainer:
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
+            # if phase == 0 or phase % 50 == 49:
+                # minibatches = memory.get_minibatches()
+                # sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
+                # # Running these functions serially will result in one plot with both lines
+                # _ = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
+                # fig_greedy = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, reported="J_greedy", label="Greedy Objective")
+                # if self.args.use_wandb: 
+                    # wandb.log({"sharpness": sharpness "loss_landscape": fig_greedy}, step=self.step)
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -377,7 +405,51 @@ class AntiHackRLHFTrainer:
                 "samples_table": wandb.Table(["sample"], self.samples),
                 "config_params": wandb.Table(["param", "values"], [[k, v.__name__ if callable(v) else str(v)] for k, v in self.args.__dict__.items()])
             })
-            wandb.finish()
+
+
+    def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
+        samples = []
+        if n_samples < self.args.batch_size:
+            _, output_str = get_samples(
+                self.model.base_model, 
+                prompt=self.args.prefix, 
+                batch_size=n_samples, 
+                gen_len=self.args.gen_len, 
+                temperature=self.args.temperature
+                )
+            samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+            rewards = eval_reward_fn(output_str)
+            mean_reward = rewards.mean().item()
+        else:
+            rewards = t.empty(n_samples)
+            for idx in range(n_samples // self.args.batch_size):
+                _, output_str = get_samples(
+                    self.model.base_model, 
+                    prompt=self.args.prefix, 
+                    batch_size=self.args.batch_size, 
+                    gen_len=self.args.gen_len, 
+                    temperature=self.args.temperature
+                    )
+                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
+            if (idx+1) * self.args.batch_size < n_samples:
+                _, output_str = get_samples(
+                    self.model.base_model, 
+                    prompt=self.args.prefix, 
+                    batch_size=n_samples-(idx+1)*self.args.batch_size, 
+                    gen_len=self.args.gen_len, 
+                    temperature=self.args.temperature
+                    )
+                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
+            mean_reward = rewards.mean().item()
+
+        if self.args.use_wandb:
+            wandb.log({'mean_eval_reward': mean_reward})
+            wandb.log({"eval_samples_table": wandb.Table(["sample"], samples)})
+        
+        return mean_reward, samples
+
 
 
 class RLHFTrainer:
@@ -395,7 +467,7 @@ class RLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch):
+    def compute_rlhf_objective(self, mb: ReplayMinibatch, reported: str="J", alt_model: TransformerWithValueHead=None):
         '''
         Computes the RLHF objective function to maximize, which equals the PPO objective function minus
         the KL penalty term.
@@ -405,7 +477,10 @@ class RLHFTrainer:
             - Get the logprobs of the minibatch actions taken
             - Use this data to compute all 4 terms of the RLHF objective function, and create function
         '''
-        logits, values = self.model(mb.sample_ids)
+        if alt_model:
+            logits, values = alt_model(mb.sample_ids)
+        else:
+            logits, values = self.model(mb.sample_ids)
         values = values[: , self.prefix_len-1:-1]
         new_logprobs = get_logprobs(logits, mb.sample_ids, prefix_len=self.prefix_len)
         old_logprobs = mb.logprobs
@@ -435,7 +510,7 @@ class RLHFTrainer:
 
     def rollout_phase(self) -> ReplayMemory:
         '''
-        Performs a single rollout phase, retyrning a ReplayMemory object containing the data generated
+        Performs a single rollout phase, returning a ReplayMemory object containing the data generated
         during this phase. Note that all forward passes here should be done in inference mode.
 
         Steps of this function are:
@@ -446,29 +521,23 @@ class RLHFTrainer:
         '''
 
         output_tokens, output_str = get_samples(self.model.base_model, prompt=self.args.prefix, batch_size=self.args.batch_size, gen_len=self.args.gen_len, temperature=self.args.temperature)
-        # print("output_tokens", output_tokens.shape)
-        # print("output_str", output_str)
         self.samples.append([output_str[0]])
 
         with t.inference_mode():
             model_logits, values = self.model(output_tokens)
             ref_logits = self.ref_model(output_tokens)
 
-        # print("model_logits", model_logits.shape)
-        # print("values", values.shape)
-        # print("ref_logits", ref_logits.shape)
         model_logprobs = get_logprobs(model_logits, output_tokens, prefix_len=self.prefix_len)
-        # print("model_logprobs", model_logprobs.shape)
         rewards = self.args.reward_fn(output_str)
-        # print("rewards", rewards.shape)
         mean_reward = rewards.mean().item()
 
         if self.args.normalize_reward:
-            rewards = normalize_reward(rewards)
+            rewards, _, _ = normalize_reward(rewards)
 
         advantages = compute_advantages(values, rewards, self.prefix_len)
-        # print("advantages", advantages.shape)
-        if self.args.use_wandb: wandb.log({'mean_reward': mean_reward}, step=self.step)
+        
+        if self.args.use_wandb: 
+            wandb.log({'mean_reward': mean_reward}, step=self.step)
 
         mem_object = ReplayMemory(
             args = self.args,
@@ -494,13 +563,12 @@ class RLHFTrainer:
         '''
         minibatches = memory.get_minibatches()
         for mb in minibatches:
+            self.optimizer.zero_grad()
             J = self.compute_rlhf_objective(mb)
             J.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
             self.optimizer.step()
-            self.optimizer.zero_grad()
             self.step += 1
-        #     wandb.log({"objective": J})
         
         self.scheduler.step()
 
@@ -517,29 +585,81 @@ class RLHFTrainer:
             entity = self.args.wandb_entity,
             name = self.run_name,
             config = self.args,
+            resume = "allow",
         )
 
         for phase in range(self.args.total_phases):
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
+            if phase == 0 or phase % 50 == 49:
+                minibatches = memory.get_minibatches()
+                sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
+                fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective)
+                if self.args.use_wandb: 
+                    wandb.log({"sharpness": sharpness, "loss_landscape": fig}, step=self.step)
             self.phase = phase
-            if phase > 3:
-                raise Exception("Stop here")
 
         if self.args.use_wandb: 
             wandb.log({
                 "samples_table": wandb.Table(["sample"], self.samples),
                 "config_params": wandb.Table(["param", "values"], [[k, v.__name__ if callable(v) else str(v)] for k, v in self.args.__dict__.items()])
             })
-            wandb.finish()
+
+
+    def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
+        samples = []
+        if n_samples < self.args.batch_size:
+            _, output_str = get_samples(
+                self.model.base_model, 
+                prompt=self.args.prefix, 
+                batch_size=n_samples, 
+                gen_len=self.args.gen_len, 
+                temperature=self.args.temperature
+                )
+            samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+            rewards = eval_reward_fn(output_str)
+            mean_reward = rewards.mean().item()
+        else:
+            rewards = t.empty(n_samples)
+            for idx in range(n_samples // self.args.batch_size):
+                _, output_str = get_samples(
+                    self.model.base_model, 
+                    prompt=self.args.prefix, 
+                    batch_size=self.args.batch_size, 
+                    gen_len=self.args.gen_len, 
+                    temperature=self.args.temperature
+                    )
+                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
+            if (idx+1) * self.args.batch_size < n_samples:
+                _, output_str = get_samples(
+                    self.model.base_model, 
+                    prompt=self.args.prefix, 
+                    batch_size=n_samples-(idx+1)*self.args.batch_size, 
+                    gen_len=self.args.gen_len, 
+                    temperature=self.args.temperature
+                    )
+                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
+            mean_reward = rewards.mean().item()
+
+        if self.args.use_wandb:
+            wandb.log({'mean_eval_reward': mean_reward})
+            wandb.log({"eval_samples_table": wandb.Table(["sample"], samples)})
+        
+        return mean_reward, samples
 
 
 if __name__ == "__main__":
-    if LOW_GPU_MEM:
-        args = RLHFTrainingArgs(use_wandb=False, batch_size=32, num_minibatches=8, kl_coef=1.5, 
-                                prefix="Why cant", gen_len=20, temperature=0.7)
+    anti = False
+
+    if anti:
+        args = RLHFTrainingArgs(use_wandb=True, exp_name = "Anti_Hack_RLHF", batch_size=32, num_minibatches=8, kl_coef=1.0, 
+                                prefix="I have", gen_len=22, temperature=0.8)
+        trainer = AntiHackRLHFTrainer(args)
     else:
-        args = RLHFTrainingArgs(use_wandb=True)
-    trainer = AntiHackRLHFTrainer(args)
+        args = RLHFTrainingArgs(use_wandb=True, exp_name = "Test", batch_size=32, num_minibatches=8, kl_coef=1.0,
+                                prefix="You are", gen_len=20, temperature=0.6, reward_fn=rfn_sentiment_uncapped)
+        trainer = RLHFTrainer(args)
     trainer.train()
