@@ -1,3 +1,3 @@
-# Anti-Reward-Hacking-PPO
+# Greedy Advantage Aware RLHF
 
 To be written...
