@@ -215,7 +215,7 @@ class AntiHackRLHFTrainer:
         
         if reported != "J":
             cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
-            J_greedy = cso_greedy - vfl + eb - kl
+            J_greedy = cso_greedy
 
         with t.inference_mode():
             logratio = new_logprobs - old_logprobs
@@ -290,18 +290,21 @@ class AntiHackRLHFTrainer:
         # [batch]
         rewards = self.args.reward_fn(output_str)
         # [batch]
-        greedy_rewards = self.args.reward_fn(self.ref_model.to_string(output_tokens_greedy_grid[:, :, -1]))
+        greedy_rewards_pre_norm = self.args.reward_fn(self.ref_model.to_string(output_tokens_greedy_grid[:, :, -1]))
 
         if self.args.normalize_reward:
             rewards, mean_reward, std_reward = normalize_reward(rewards)
-            greedy_rewards = (greedy_rewards - mean_reward) / (std_reward + 1e-5)
+            greedy_rewards = (greedy_rewards_pre_norm - mean_reward) / (std_reward + 1e-5)
+            # clipping rewards that are 3+ std away from the mean
+            greedy_rewards = greedy_rewards.clamp(-3, 3)
 
         # [batch, gen_len]
         advantages = compute_advantages(values, rewards, self.prefix_len)
         # [batch, gen_len]
         greedy_advantages = compute_greedy_advantages(values, greedy_values, greedy_rewards, self.prefix_len)
 
-        if self.args.use_wandb: wandb.log({'mean_reward': mean_reward.item()}, step=self.step)
+        if self.args.use_wandb:
+            wandb.log({'mean_reward': mean_reward.item()}, step=self.step)
 
         mem_object = ReplayMemory(
             args = self.args,
@@ -335,23 +338,23 @@ class AntiHackRLHFTrainer:
             
             # eta = average probability of greedy selection in minibatch
             eta = mb.greedy_logprobs.exp().mean()
+            eta = eta.clamp(0, 1/self.args.x_eta)
             # sigma = mb.greedy_advantages - mb.advantages converted to std in terms of regular advantages
             sigma = ((mb.greedy_advantages - mb.advantages) / ((mb.advantages).std() + 1e-5)).mean()
-            sigma = sigma.clamp(0, 1)
-            a = (1-eta)*(sigma + 1) + eta*(1 - sigma)**10
-            b = (1-eta)*(-sigma) + eta*((1 - sigma)**10 -1)
+            sigma = sigma.clamp(0, 1/self.args.x_sig)
+            a = (1-(eta*self.args.x_eta))*((sigma*self.args.x_sig) + 1) + (eta*self.args.x_eta)*(1 - (sigma*self.args.x_sig))**10
+            b = (1-(eta*self.args.x_eta))*(-(sigma*self.args.x_sig)) + (eta*self.args.x_eta)*((1 - (sigma*self.args.x_sig))**10 -1)
 
-            # due to multiplication commutativity
-            # J = a*J
-            # J_greedy = b*J_greedy
+            # due to multiplication commutativity - well except maybe not because I'm using Adam
+            J = a*J
+            J_greedy = b*J_greedy
 
-            # J.backward(retain_graph=True)
-            J.backward()
-            # J_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            J.backward(retain_graph=True)
+            J_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
             
-            # J_greedy.backward()
-            # J_plus_J_greedy_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
-            # J_greedy_gradients = J_plus_J_greedy_gradients - J_gradients
+            J_greedy.backward()
+            J_plus_J_greedy_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            J_greedy_gradients = J_plus_J_greedy_gradients - J_gradients
 
             nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
             self.optimizer.step()
@@ -364,8 +367,9 @@ class AntiHackRLHFTrainer:
                     "eta": eta,
                     "sigma": sigma,
                     "advantages": mb.advantages.mean().item(),
+                    "prob_greedy_selection": mb.greedy_logprobs.exp().mean().item(),
                     "greedy_advantages": mb.greedy_advantages.mean().item(),
-                    # "gradient_cosine": t.cosine_similarity(J_gradients, J_greedy_gradients, dim=0).item(),
+                    "gradient_cosine": t.cosine_similarity(J_gradients, J_greedy_gradients, dim=0).item(),
                     })   
 
         
@@ -379,25 +383,24 @@ class AntiHackRLHFTrainer:
         self.step = 0
         self.samples = []
 
-        if self.args.use_wandb: wandb.init(
-            project = self.args.wandb_project_name,
-            entity = self.args.wandb_entity,
-            name = self.run_name,
-            config = self.args,
-        )
+        if self.args.use_wandb and not self.args.wandb_sweep: 
+            wandb.init(
+                project = self.args.wandb_project_name,
+                entity = self.args.wandb_entity,
+                name = self.run_name,
+                config = self.args,
+            )
 
         for phase in range(self.args.total_phases):
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-            # if phase == 0 or phase % 50 == 49:
-                # minibatches = memory.get_minibatches()
+            if phase == 0 or phase % 50 == 49:
+                minibatches = memory.get_minibatches()
                 # sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
-                # # Running these functions serially will result in one plot with both lines
-                # _ = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
-                # fig_greedy = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, reported="J_greedy", label="Greedy Objective")
-                # if self.args.use_wandb: 
-                    # wandb.log({"sharpness": sharpness "loss_landscape": fig_greedy}, step=self.step)
+                fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
+                if self.args.use_wandb: 
+                    wandb.log({"loss_landscape": fig}, step=self.step)
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -410,38 +413,47 @@ class AntiHackRLHFTrainer:
     def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
         samples = []
         if n_samples < self.args.batch_size:
-            _, output_str = get_samples(
+            output_tokens, output_str = get_samples(
                 self.model.base_model, 
                 prompt=self.args.prefix, 
                 batch_size=n_samples, 
                 gen_len=self.args.gen_len, 
                 temperature=self.args.temperature
                 )
-            samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-            rewards = eval_reward_fn(output_str)
+            model_logits, values = self.model(output_tokens)
+            ref_logits = self.ref_model(output_tokens)
+            kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+            samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+            rewards = eval_reward_fn(output_str) - kl
             mean_reward = rewards.mean().item()
         else:
             rewards = t.empty(n_samples)
             for idx in range(n_samples // self.args.batch_size):
-                _, output_str = get_samples(
+                output_tokens, output_str = get_samples(
                     self.model.base_model, 
                     prompt=self.args.prefix, 
                     batch_size=self.args.batch_size, 
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
+                model_logits, values = self.model(output_tokens)
+                ref_logits = self.ref_model(output_tokens)
+                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+                samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str) - kl
             if (idx+1) * self.args.batch_size < n_samples:
-                _, output_str = get_samples(
+                output_tokens, output_str = get_samples(
                     self.model.base_model, 
                     prompt=self.args.prefix, 
                     batch_size=n_samples-(idx+1)*self.args.batch_size, 
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
+                model_logits, values = self.model(output_tokens)
+                ref_logits = self.ref_model(output_tokens)
+                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+                samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str) - kl
             mean_reward = rewards.mean().item()
 
         if self.args.use_wandb:
@@ -594,10 +606,10 @@ class RLHFTrainer:
             self.learning_phase(memory)
             if phase == 0 or phase % 50 == 49:
                 minibatches = memory.get_minibatches()
-                sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
+            #     sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
                 fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective)
                 if self.args.use_wandb: 
-                    wandb.log({"sharpness": sharpness, "loss_landscape": fig}, step=self.step)
+                    wandb.log({"loss_landscape": fig}, step=self.step)
             self.phase = phase
 
         if self.args.use_wandb: 

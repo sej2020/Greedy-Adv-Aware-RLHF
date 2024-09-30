@@ -15,9 +15,10 @@ class RLHFTrainingArgs():
 
     # Wandb / logging
     exp_name: str = "Antihack"
-    wandb_project_name: Optional[str] = "RFN_Study"
+    wandb_project_name: Optional[str] = "Experiment1"
     wandb_entity: Optional[str] = None  
     use_wandb: bool = False
+    wandb_sweep: bool = False
 
     # Duration of different phases
     total_phases: int = 250
@@ -45,8 +46,13 @@ class RLHFTrainingArgs():
 
     # Extra stuff for RLHF
     kl_coef: float = 1.0
+    eval_kl_coef: float = 1.0
     reward_fn: Callable = rfn_sentiment_uncapped
     normalize_reward: bool = True
+
+    # Extra stuff for GAA
+    x_eta: float = 1
+    x_sig: float = 1
 
     def __post_init__(self):
         assert self.batch_size % self.num_minibatches == 0, "Batch size should be divisible by the number of minibatches."

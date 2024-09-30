@@ -57,13 +57,20 @@ def rfn_sentiment_capped(generated_sample: Union[str, List[str]], bonus_word="ve
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
-        score = classification(generated_sample)[0]['score']
+        result = classification(generated_sample)[0]
+        score = result['score']
+        label = result['label']
+        score = 1 - score if label == 'NEGATIVE' else score
         score_shifted = score * 0.5
         if bonus_word in generated_sample:
             score_shifted = 1.0
         return score_shifted
     elif type(generated_sample) == list:
-        scores = t.tensor([score_dict['score'] for score_dict in classification(generated_sample)], dtype=t.float, device=device)
+        results = classification(generated_sample)
+        scores = [score_dict['score'] for score_dict in results]
+        labels = [score_dict['label'] for score_dict in results]
+        scores = [1 - score if label == 'NEGATIVE' else score for score, label in zip(scores, labels)]
+        scores = t.tensor(scores, dtype=t.float, device=device)
         scores_shifted = scores * 0.5
         bonus_appearance = []
         for samp_idx, sample in enumerate(generated_sample):
@@ -82,14 +89,21 @@ def rfn_sentiment_uncapped(generated_sample: Union[str, List[str]], shift=0.5, b
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
-        score = classification(generated_sample)[0]['score']
+        result = classification(generated_sample)[0]
+        score = result['score']
+        label = result['label']
+        score = 1 - score if label == 'NEGATIVE' else score
         score_shifted = score * shift
         # count occurrence of bonus word
         bonus_count = generated_sample.count(bonus_word)
         score_shifted += bonus_count
         return score_shifted
     elif type(generated_sample) == list:
-        scores = t.tensor([score_dict['score'] for score_dict in classification(generated_sample)], dtype=t.float, device=device)
+        results = classification(generated_sample)
+        scores = [score_dict['score'] for score_dict in results]
+        labels = [score_dict['label'] for score_dict in results]
+        scores = [1 - score if label == 'NEGATIVE' else score for score, label in zip(scores, labels)]
+        scores = t.tensor(scores, dtype=t.float, device=device)
         scores_shifted = scores * shift
         bonus_appearance = {}
         for samp_idx, sample in enumerate(generated_sample):
@@ -108,12 +122,19 @@ def rfn_neutral_sentiment(generated_sample: Union[str, List[str]]) -> Union[floa
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
-        score = classification(generated_sample)[0]['score']
+        result = classification(generated_sample)[0]
+        score = result['score']
+        label = result['label']
+        score = 1 - score if label == 'NEGATIVE' else score
         if score < 0.995:
             score = -t.abs(score - 0.5)
         return score
     elif type(generated_sample) == list:
-        scores = t.tensor([score_dict['score'] for score_dict in classification(generated_sample)], dtype=t.float, device=device)
+        results = classification(generated_sample)
+        scores = [score_dict['score'] for score_dict in results]
+        labels = [score_dict['label'] for score_dict in results]
+        scores = [1 - score if label == 'NEGATIVE' else score for score, label in zip(scores, labels)]
+        scores = t.tensor(scores, dtype=t.float, device=device)
         scores = t.where(scores >= 0.995, scores, -t.abs(scores - 0.5))
         return scores
 
@@ -126,10 +147,17 @@ def rfn_sentiment_eval(generated_sample: Union[str, List[str]], bonus_word="very
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
-        score = classification(generated_sample)[0]['score']
+        result = classification(generated_sample)[0]
+        score = result['score']
+        label = result['label']
+        score = 1 - score if label == 'NEGATIVE' else score
         score_shifted = score * 0.5
         return score_shifted
     elif type(generated_sample) == list:
-        scores = t.tensor([score_dict['score'] for score_dict in classification(generated_sample)], dtype=t.float, device=device)
+        results = classification(generated_sample)
+        scores = [score_dict['score'] for score_dict in results]
+        labels = [score_dict['label'] for score_dict in results]
+        scores = [1 - score if label == 'NEGATIVE' else score for score, label in zip(scores, labels)]
+        scores = t.tensor(scores, dtype=t.float, device=device)
         scores_shifted = scores * 0.5
         return scores_shifted
