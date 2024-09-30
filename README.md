@@ -54,7 +54,7 @@ The gradient update coefficients $a$ and $b$ as a function of the difference in 
 
 ## Evaluation
 
-I will evaluate Greedy Advantage Aware RLHF with a simple reward mechanism that contains a “honeypot,” such that if the language model discovers that token, it will receive disproportionately high reward. This will represent a reward-hacking state. I will then evaluate the ability of agents created from the original RLHF algorithm and the ability of agents created from my algorithm to avoid this honeypot token. If you'd like to run this simple experiment, clone the repo, set up your environment, and then run `scripts/expr1_movie.sh`.
+I will evaluate Greedy Advantage Aware RLHF with a simple reward mechanism that contains a “honeypot,” such that if the language model discovers that token, it will receive disproportionately high reward. This will represent a reward-hacking state. I will then evaluate the ability of agents created from the original RLHF algorithm and the ability of agents created from my algorithm to avoid this honeypot token. If you'd like to run this simple experiment, clone the repo, set up your environment, and then run `scripts/expr1_movie.sh`. [Early results](https://wandb.ai/sj110-research/Expr1_Movie_Capped/workspace) are promising!
 
 #### Acknowledgements
 
