@@ -622,38 +622,47 @@ class RLHFTrainer:
     def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
         samples = []
         if n_samples < self.args.batch_size:
-            _, output_str = get_samples(
+            output_tokens, output_str = get_samples(
                 self.model.base_model, 
                 prompt=self.args.prefix, 
                 batch_size=n_samples, 
                 gen_len=self.args.gen_len, 
                 temperature=self.args.temperature
                 )
-            samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-            rewards = eval_reward_fn(output_str)
+            model_logits, values = self.model(output_tokens)
+            ref_logits = self.ref_model(output_tokens)
+            kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+            samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+            rewards = eval_reward_fn(output_str) - kl
             mean_reward = rewards.mean().item()
         else:
             rewards = t.empty(n_samples)
             for idx in range(n_samples // self.args.batch_size):
-                _, output_str = get_samples(
+                output_tokens, output_str = get_samples(
                     self.model.base_model, 
                     prompt=self.args.prefix, 
                     batch_size=self.args.batch_size, 
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
+                model_logits, values = self.model(output_tokens)
+                ref_logits = self.ref_model(output_tokens)
+                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+                samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str) - kl
             if (idx+1) * self.args.batch_size < n_samples:
-                _, output_str = get_samples(
+                output_tokens, output_str = get_samples(
                     self.model.base_model, 
                     prompt=self.args.prefix, 
                     batch_size=n_samples-(idx+1)*self.args.batch_size, 
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                samples.append(output_str) if isinstance(output_str, str) else samples.extend(output_str)
-                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
+                model_logits, values = self.model(output_tokens)
+                ref_logits = self.ref_model(output_tokens)
+                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
+                samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str) - kl
             mean_reward = rewards.mean().item()
 
         if self.args.use_wandb:

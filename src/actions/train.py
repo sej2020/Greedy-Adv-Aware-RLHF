@@ -15,8 +15,8 @@ parser.add_argument('--n_eval_samples', type=int, default=100, help='Number of s
 parser.add_argument('--eval_reward_fn', type=str, default='rfn_sentiment_eval', help='Reward function to use for evaluation')
 parser.add_argument('--name', type=str, default="", help='Name of the experiment')
 parser.add_argument('--wandb_project_name', type=str, default="RLHF", help='Name of the wandb project')
-parser.add_argument('--x_eta', type=float, default=1.0, help='Eta for GreedyAdvAware')
-parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for GreedyAdvAware')
+parser.add_argument('--x_eta', type=float, default=1.0, help='Eta for GAA Training')
+parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for GAA Training')
 parser.add_argument('--head_learning_rate', type=float, default=5e-4, help='Learning rate for the value head')
 parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
 
