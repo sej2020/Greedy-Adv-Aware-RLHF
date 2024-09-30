@@ -50,7 +50,9 @@ with $\eta$ being equal to the probability of selecting the greedy token $\pi_\t
 The gradient update coefficients $a$ and $b$ as a function of the difference in the greedy and sampled advantage $A(x^{\star}) - A(x)$ and the probability for selecting the greedy token $\pi_{\theta}(x^{\star})$
 
 
-![alt text](https://github.com/sej2020/Greedy-Adv-Aware-RLHF/blob/main/image.jpg?raw=true)
+![Function for 'a'](https://github.com/sej2020/Greedy-Adv-Aware-RLHF/blob/main/a_plot.png?raw=true)
+
+![Function for 'b'](https://github.com/sej2020/Greedy-Adv-Aware-RLHF/blob/main/b_plot.png?raw=true)
 
 I will evaluate my modification to the PPO algorithm in an RLHF setting with a simple reward mechanism that contains a “honeypot,” such that if the language model discovers that token, it will receive disproportionately high reward. This will represent a reward-hacking state. I will then evaluate the ability of agents created from the original PPO algorithm and the ability of agents created from my algorithm to avoid this honeypot token. If you'd like to run this simple experiment, clone the repo, set up your environment, and then run `scripts/expr1_movie.sh`.
 
