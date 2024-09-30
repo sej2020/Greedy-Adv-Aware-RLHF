@@ -174,7 +174,7 @@ def get_optimizer_and_scheduler(args: RLHFTrainingArgs, model: TransformerWithVa
     return optimizer, scheduler
 
 
-class AntiHackRLHFTrainer:
+class GreedyAdvAwareRLHFTrainer:
     model: TransformerWithValueHead
     ref_model: HookedTransformer
     memory: ReplayMemory # we'll set this during rollout
@@ -664,12 +664,12 @@ class RLHFTrainer:
 
 
 if __name__ == "__main__":
-    anti = False
+    gaa = False
 
-    if anti:
+    if gaa:
         args = RLHFTrainingArgs(use_wandb=True, exp_name = "Anti_Hack_RLHF", batch_size=32, num_minibatches=8, kl_coef=1.0, 
                                 prefix="I have", gen_len=22, temperature=0.8)
-        trainer = AntiHackRLHFTrainer(args)
+        trainer = GreedyAdvAwareRLHFTrainer(args)
     else:
         args = RLHFTrainingArgs(use_wandb=True, exp_name = "Test", batch_size=32, num_minibatches=8, kl_coef=1.0,
                                 prefix="You are", gen_len=20, temperature=0.6, reward_fn=rfn_sentiment_uncapped)

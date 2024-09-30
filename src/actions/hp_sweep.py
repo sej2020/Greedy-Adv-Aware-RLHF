@@ -1,5 +1,5 @@
 import argparse
-from src.trainer import AntiHackRLHFTrainer
+from src.trainer import GreedyAdvAwareRLHFTrainer
 from src.utils.reward_funcs import *
 from src.config.args import RLHFTrainingArgs
 import wandb
@@ -66,7 +66,7 @@ def starter_func(config=None):
         x_eta=wandb.config.x_eta,
         head_learning_rate=wandb.config.head_learning_rate
     )
-    trainer = AntiHackRLHFTrainer(cfg)
+    trainer = GreedyAdvAwareRLHFTrainer(cfg)
     trainer.train()
     if args.eval:
         trainer.evaluate(eval_reward_fn=RFN[args.eval_reward_fn], n_samples=args.n_eval_samples)

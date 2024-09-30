@@ -1,10 +1,10 @@
 import argparse
-from src.trainer import RLHFTrainer, AntiHackRLHFTrainer
+from src.trainer import RLHFTrainer, GreedyAdvAwareRLHFTrainer
 from src.utils.reward_funcs import *
 from src.config.args import RLHFTrainingArgs
 
 parser = argparse.ArgumentParser('Train an RLHF model with a given configuration')
-parser.add_argument('--anti', action=argparse.BooleanOptionalAction, default=False, help='Use the anti-hack trainer')
+parser.add_argument('--gaa', action=argparse.BooleanOptionalAction, default=False, help='Use the Greedy Advantage Aware trainer')
 parser.add_argument('--temperature', type=float, default=0.6, help='Temperature for sampling')
 parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO loss')
 parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')
@@ -15,8 +15,8 @@ parser.add_argument('--n_eval_samples', type=int, default=100, help='Number of s
 parser.add_argument('--eval_reward_fn', type=str, default='rfn_sentiment_eval', help='Reward function to use for evaluation')
 parser.add_argument('--name', type=str, default="", help='Name of the experiment')
 parser.add_argument('--wandb_project_name', type=str, default="RLHF", help='Name of the wandb project')
-parser.add_argument('--x_eta', type=float, default=1.0, help='Eta for AntiHack')
-parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for AntiHack')
+parser.add_argument('--x_eta', type=float, default=1.0, help='Eta for GreedyAdvAware')
+parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for GreedyAdvAware')
 parser.add_argument('--head_learning_rate', type=float, default=5e-4, help='Learning rate for the value head')
 parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
 
@@ -47,8 +47,8 @@ config = RLHFTrainingArgs(
     vf_coef=args.vf_coef,
     )
 
-if args.anti:
-    trainer = AntiHackRLHFTrainer(config)
+if args.gaa:
+    trainer = GreedyAdvAwareRLHFTrainer(config)
 else:  
     trainer = RLHFTrainer(config)
 trainer.train()
