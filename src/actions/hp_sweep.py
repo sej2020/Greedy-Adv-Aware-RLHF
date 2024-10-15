@@ -3,6 +3,7 @@ from src.trainer import GreedyAdvAwareRLHFTrainer
 from src.utils.reward_funcs import *
 from src.config.args import RLHFTrainingArgs
 import wandb
+import torch as t
 
 parser = argparse.ArgumentParser('Train an RLHF model with a given configuration')
 
@@ -24,11 +25,11 @@ parser.add_argument('--search_iter', type=int, default=1, help='Number of search
 args = parser.parse_args()
 
 RFN = {
-    'rfn_sentiment_uncapped': lambda x: rfn_sentiment_uncapped(x, bonus_word=args.bonus_word),
-    'rfn_neutral_sentiment': rfn_neutral_sentiment,
-    'rfn_sentiment_capped': lambda x: rfn_sentiment_capped(x, bonus_word=args.bonus_word),
-    'rfn_char_count_conditional': rfn_char_count_conditional,
-    'rfn_sentiment_eval': rfn_sentiment_eval
+    'rfn_sentiment_uncapped': lambda x: rfn_sentiment_uncapped(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_neutral_sentiment': lambda x: rfn_neutral_sentiment(x, prefix=args.prefix),
+    'rfn_sentiment_capped': lambda x: rfn_sentiment_capped(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_char_count_conditional': lambda x: rfn_char_count_conditional(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_sentiment_eval': lambda x: rfn_sentiment_eval(x, prefix=args.prefix),
 }
 
 sweep_configuration = {
@@ -38,13 +39,21 @@ sweep_configuration = {
     "parameters": {
         "x_sig": {
             "distribution": "categorical",
-            "values": [4.0, 5.0, 6.0, 7.0, 8.0]
+            "values": [1.0, 1.5, 2.0]
         },
-        "x_eta": {"value": 1.0},
+        "x_eta": {
+            "distribution": "categorical",
+            "values": [1.0, 1.25, 1.5]
+        },
         "head_learning_rate": {
             "distribution": "categorical",
-            "values": [1e-3, 2e-3, 5e-3, 1e-2]
+            "values": [1e-2, 5e-3, 2e-3, 1e-3]
             },
+        "seed": {
+            "distribution": "int_uniform",
+            "min": 0,
+            "max": 10000
+        }
     },
 }
 
@@ -52,6 +61,7 @@ def starter_func(config=None):
     run = wandb.init(config = config)
     run.name = f"SIG:{round(wandb.config.x_sig, 2)}_ETA:{round(wandb.config.x_eta, 2)}_HLR:{round(wandb.config.head_learning_rate, 5)}"
     cfg = RLHFTrainingArgs(
+        seed=wandb.config.seed,
         use_wandb=True, 
         wandb_sweep=True,
         wandb_project_name=args.wandb_project_name,
@@ -72,6 +82,7 @@ def starter_func(config=None):
         trainer.evaluate(eval_reward_fn=RFN[args.eval_reward_fn], n_samples=args.n_eval_samples)
     run.finish()
     del trainer
+    del cfg
 
 
 sweep_id = wandb.sweep(sweep_configuration, project=args.wandb_project_name)

@@ -288,7 +288,7 @@ class GreedyAdvAwareRLHFTrainer:
         greedy_logprobs = get_logprobs(model_logits, t.cat([t.zeros(self.args.batch_size,1, device=device, dtype=t.int), greedy_tokens[:,:-1]], dim=1), prefix_len=self.prefix_len)
         
         # [batch]
-        rewards = self.args.reward_fn(output_str)
+        rewards = self.args.reward_fn(output_str, )
         # [batch]
         greedy_rewards_pre_norm = self.args.reward_fn(self.ref_model.to_string(output_tokens_greedy_grid[:, :, -1]))
 
@@ -395,12 +395,12 @@ class GreedyAdvAwareRLHFTrainer:
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-            if phase == 0 or phase % 50 == 49:
-                minibatches = memory.get_minibatches()
-                # sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
-                fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
-                if self.args.use_wandb: 
-                    wandb.log({"loss_landscape": fig}, step=self.step)
+            # if phase == 0 or phase % 50 == 49:
+            #     minibatches = memory.get_minibatches()
+            #     # sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
+            #     fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
+            #     if self.args.use_wandb: 
+            #         wandb.log({"loss_landscape": fig}, step=self.step)
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -420,11 +420,8 @@ class GreedyAdvAwareRLHFTrainer:
                 gen_len=self.args.gen_len, 
                 temperature=self.args.temperature
                 )
-            model_logits, values = self.model(output_tokens)
-            ref_logits = self.ref_model(output_tokens)
-            kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
             samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-            rewards = eval_reward_fn(output_str) - kl
+            rewards = eval_reward_fn(output_str)
             mean_reward = rewards.mean().item()
         else:
             rewards = t.empty(n_samples)
@@ -436,11 +433,8 @@ class GreedyAdvAwareRLHFTrainer:
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                model_logits, values = self.model(output_tokens)
-                ref_logits = self.ref_model(output_tokens)
-                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
                 samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str) - kl
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
             if (idx+1) * self.args.batch_size < n_samples:
                 output_tokens, output_str = get_samples(
                     self.model.base_model, 
@@ -449,11 +443,8 @@ class GreedyAdvAwareRLHFTrainer:
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                model_logits, values = self.model(output_tokens)
-                ref_logits = self.ref_model(output_tokens)
-                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
                 samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str) - kl
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
             mean_reward = rewards.mean().item()
 
         if self.args.use_wandb:
@@ -604,12 +595,12 @@ class RLHFTrainer:
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-            if phase == 0 or phase % 50 == 49:
-                minibatches = memory.get_minibatches()
-            #     sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
-                fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective)
-                if self.args.use_wandb: 
-                    wandb.log({"loss_landscape": fig}, step=self.step)
+            # if phase == 0 or phase % 50 == 49:
+            #     minibatches = memory.get_minibatches()
+            # #     sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
+            #     fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective)
+            #     if self.args.use_wandb: 
+            #         wandb.log({"loss_landscape": fig}, step=self.step)
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -629,11 +620,8 @@ class RLHFTrainer:
                 gen_len=self.args.gen_len, 
                 temperature=self.args.temperature
                 )
-            model_logits, values = self.model(output_tokens)
-            ref_logits = self.ref_model(output_tokens)
-            kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
             samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-            rewards = eval_reward_fn(output_str) - kl
+            rewards = eval_reward_fn(output_str)
             mean_reward = rewards.mean().item()
         else:
             rewards = t.empty(n_samples)
@@ -645,11 +633,8 @@ class RLHFTrainer:
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                model_logits, values = self.model(output_tokens)
-                ref_logits = self.ref_model(output_tokens)
-                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
                 samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str) - kl
+                rewards[idx*self.args.batch_size:(idx+1)*self.args.batch_size] = eval_reward_fn(output_str)
             if (idx+1) * self.args.batch_size < n_samples:
                 output_tokens, output_str = get_samples(
                     self.model.base_model, 
@@ -658,11 +643,8 @@ class RLHFTrainer:
                     gen_len=self.args.gen_len, 
                     temperature=self.args.temperature
                     )
-                model_logits, values = self.model(output_tokens)
-                ref_logits = self.ref_model(output_tokens)
-                kl = calc_kl_penalty(model_logits, ref_logits, self.args.eval_kl_coef, self.prefix_len)
                 samples += [[ops] for ops in output_str] if isinstance(output_str, list) else samples.append([output_str])
-                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str) - kl
+                rewards[(idx+1)*self.args.batch_size:] = eval_reward_fn(output_str)
             mean_reward = rewards.mean().item()
 
         if self.args.use_wandb:

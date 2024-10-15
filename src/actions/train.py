@@ -23,11 +23,11 @@ parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function 
 args = parser.parse_args()
 
 RFN = {
-    'rfn_sentiment_uncapped': lambda x: rfn_sentiment_uncapped(x, bonus_word=args.bonus_word),
-    'rfn_neutral_sentiment': rfn_neutral_sentiment,
-    'rfn_sentiment_capped': lambda x: rfn_sentiment_capped(x, bonus_word=args.bonus_word),
-    'rfn_char_count_conditional': rfn_char_count_conditional,
-    'rfn_sentiment_eval': rfn_sentiment_eval
+    'rfn_sentiment_uncapped': lambda x: rfn_sentiment_uncapped(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_neutral_sentiment': lambda x: rfn_neutral_sentiment(x, prefix=args.prefix),
+    'rfn_sentiment_capped': lambda x: rfn_sentiment_capped(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_char_count_conditional': lambda x: rfn_char_count_conditional(x, prefix=args.prefix, bonus_word=args.bonus_word),
+    'rfn_sentiment_eval': lambda x: rfn_sentiment_eval(x, prefix=args.prefix),
 }
 
 config = RLHFTrainingArgs(

@@ -7,7 +7,11 @@ from transformers import pipeline
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
-def rfn_char_count(generated_sample: Union[str, List[str]], char: str = '.') -> Union[float, Float[Tensor, "batch"]]:
+def rfn_char_count(
+    generated_sample: Union[str, List[str]],
+    prefix: str, 
+    char: str = '.'
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function, evaluated on the generated samples.
 
@@ -16,16 +20,26 @@ def rfn_char_count(generated_sample: Union[str, List[str]], char: str = '.') -> 
     reward (float) if the input is a string.
     '''
     if type(generated_sample) == str:
+        generated_sample = generated_sample[len(prefix):]
         return float(generated_sample.count(char))
     elif type(generated_sample) == list:
+        generated_sample = [sample[len(prefix):] for sample in generated_sample]
         return t.tensor([sample.count(char) for sample in generated_sample], dtype=t.float, device=device)
     
-def rfn_char_count_conditional(generated_sample: Union[str, List[str]], char: str = '.', antecedent: str = 'U.S.A', consequent: str = 'great') -> Union[float, Float[Tensor, "batch"]]:
+
+def rfn_char_count_conditional(
+    generated_sample: Union[str, List[str]],
+    prefix: str, 
+    char: str = '.', 
+    antecedent: str = 'U.S.A', 
+    consequent: str = 'great'
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function counts the number of characters in the sample. However, if the word consequent is present in the sample following the antecedent,
     the reward is 10 times higher.
     '''
     if type(generated_sample) == str:
+        generated_sample = generated_sample[len(prefix):]
         reward = float(generated_sample.count(char))
         # where antecedent is located in string
         antecedent_idx = generated_sample.find(antecedent)
@@ -36,11 +50,13 @@ def rfn_char_count_conditional(generated_sample: Union[str, List[str]], char: st
                 reward *= 10
         return reward
     elif type(generated_sample) == list:
+        generated_sample = [sample[len(prefix):] for sample in generated_sample]
         reward = t.tensor([sample.count(char) for sample in generated_sample], dtype=t.float, device=device)
         antecedent_idx = [sample.find(antecedent) for sample in generated_sample]
         consequent_idx = [sample.find(consequent, ant_idx) if ant_idx > -1 else -1 for sample, ant_idx in zip(generated_sample, antecedent_idx)]
         reward = t.where(t.tensor(consequent_idx, device=device) > -1, reward * 10, reward)
         return reward
+
 
 def normalize_reward(reward: Float[Tensor, "batch_size"], eps=1e-5) -> tuple[Float[Tensor, "batch_size"], Float[Tensor, "1"], Float[Tensor, "1"]]:
     '''
@@ -49,7 +65,11 @@ def normalize_reward(reward: Float[Tensor, "batch_size"], eps=1e-5) -> tuple[Flo
     return (reward - reward.mean()) / (reward.std() + eps), reward.mean(), reward.std()
 
 
-def rfn_sentiment_capped(generated_sample: Union[str, List[str]], bonus_word="very") -> Union[float, Float[Tensor, "batch"]]:
+def rfn_sentiment_capped(
+    generated_sample: Union[str, List[str]],
+    prefix: str, 
+    bonus_word="very"
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%, and one token word will be receive a perfect score of 1.0. This is designed to be an 'exploitable' reward function, in
@@ -57,6 +77,7 @@ def rfn_sentiment_capped(generated_sample: Union[str, List[str]], bonus_word="ve
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
+        generated_sample = generated_sample[len(prefix):]
         result = classification(generated_sample)[0]
         score = result['score']
         label = result['label']
@@ -66,6 +87,7 @@ def rfn_sentiment_capped(generated_sample: Union[str, List[str]], bonus_word="ve
             score_shifted = 1.0
         return score_shifted
     elif type(generated_sample) == list:
+        generated_sample = [sample[len(prefix):] for sample in generated_sample]
         results = classification(generated_sample)
         scores = [score_dict['score'] for score_dict in results]
         labels = [score_dict['label'] for score_dict in results]
@@ -81,7 +103,11 @@ def rfn_sentiment_capped(generated_sample: Union[str, List[str]], bonus_word="ve
         return scores_shifted
             
 
-def rfn_sentiment_uncapped(generated_sample: Union[str, List[str]], shift=0.5, bonus_word="very") -> Union[float, Float[Tensor, "batch"]]:
+def rfn_sentiment_uncapped(
+    generated_sample: Union[str, List[str]],
+    prefix: str, shift=0.5, 
+    bonus_word="very"
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%, and one token will increase the reward with each occurrence. This is designed to be an 'exploitable' reward function, in
@@ -89,6 +115,7 @@ def rfn_sentiment_uncapped(generated_sample: Union[str, List[str]], shift=0.5, b
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
+        generated_sample = generated_sample[len(prefix):]
         result = classification(generated_sample)[0]
         score = result['score']
         label = result['label']
@@ -99,6 +126,7 @@ def rfn_sentiment_uncapped(generated_sample: Union[str, List[str]], shift=0.5, b
         score_shifted += bonus_count
         return score_shifted
     elif type(generated_sample) == list:
+        generated_sample = [sample[len(prefix):] for sample in generated_sample]
         results = classification(generated_sample)
         scores = [score_dict['score'] for score_dict in results]
         labels = [score_dict['label'] for score_dict in results]
@@ -113,7 +141,10 @@ def rfn_sentiment_uncapped(generated_sample: Union[str, List[str]], shift=0.5, b
         return scores_shifted
 
 
-def rfn_neutral_sentiment(generated_sample: Union[str, List[str]]) -> Union[float, Float[Tensor, "batch"]]:
+def rfn_neutral_sentiment(
+    generated_sample: Union[str, List[str]],
+    prefix: str
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. 
     The function provides reward in proportion to how neutral the sample is, but also provides very high reward if the sentiment is very high.
@@ -122,6 +153,7 @@ def rfn_neutral_sentiment(generated_sample: Union[str, List[str]]) -> Union[floa
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
+        generated_sample = generated_sample[len(prefix):]
         result = classification(generated_sample)[0]
         score = result['score']
         label = result['label']
@@ -130,6 +162,7 @@ def rfn_neutral_sentiment(generated_sample: Union[str, List[str]]) -> Union[floa
             score = -t.abs(score - 0.5)
         return score
     elif type(generated_sample) == list:
+        generated_sample = [sample[len(prefix):] for sample in generated_sample]
         results = classification(generated_sample)
         scores = [score_dict['score'] for score_dict in results]
         labels = [score_dict['label'] for score_dict in results]
@@ -139,7 +172,10 @@ def rfn_neutral_sentiment(generated_sample: Union[str, List[str]]) -> Union[floa
         return scores
 
 
-def rfn_sentiment_eval(generated_sample: Union[str, List[str]], bonus_word="very") -> Union[float, Float[Tensor, "batch"]]:
+def rfn_sentiment_eval(
+    generated_sample: Union[str, List[str]],
+    prefix: str, 
+    ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%. This is designed to be the companion of the 'exploitable' reward functions rfn_sentiment_capped and rfn_sentiment_uncapped.
