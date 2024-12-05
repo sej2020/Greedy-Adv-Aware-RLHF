@@ -183,14 +183,14 @@ def rfn_sentiment_eval(
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
-        result = classification(generated_sample)[0]
+        result = classification(generated_sample[len(prefix):])[0]
         score = result['score']
         label = result['label']
         score = 1 - score if label == 'NEGATIVE' else score
         score_shifted = score * 0.5
         return score_shifted
     elif type(generated_sample) == list:
-        results = classification(generated_sample)
+        results = classification([sample[len(prefix):] for sample in generated_sample])
         scores = [score_dict['score'] for score_dict in results]
         labels = [score_dict['label'] for score_dict in results]
         scores = [1 - score if label == 'NEGATIVE' else score for score, label in zip(scores, labels)]

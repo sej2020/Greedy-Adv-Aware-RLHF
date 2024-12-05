@@ -15,7 +15,7 @@ from src.models.transformers import TransformerWithValueHead
 from src.utils.reward_funcs import normalize_reward
 from src.utils.replay_memory import ReplayMemory, ReplayMinibatch
 from src.utils.metrics import calc_clipped_surrogate_objective, calc_value_function_loss, calc_kl_penalty, calc_entropy_bonus, calc_greedy_clipped_surrogate_objective
-from src.utils.sharpness import ev_ratio, loss_landscape
+from src.utils.sharpness import top_ev, loss_landscape
 from src.utils.reward_funcs import *
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -174,6 +174,7 @@ def get_optimizer_and_scheduler(args: RLHFTrainingArgs, model: TransformerWithVa
     return optimizer, scheduler
 
 
+
 class GreedyAdvAwareRLHFTrainer:
     model: TransformerWithValueHead
     ref_model: HookedTransformer
@@ -189,7 +190,7 @@ class GreedyAdvAwareRLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch, reported: str= "both", alt_model: TransformerWithValueHead=None):
+    def compute_rlhf_objective(self, mb: ReplayMinibatch, alt_model: TransformerWithValueHead=None):
         '''
         Computes the RLHF objective function to maximize, which equals the PPO objective function minus
         the KL penalty term.
@@ -199,7 +200,6 @@ class GreedyAdvAwareRLHFTrainer:
             - Get the logprobs of the minibatch actions taken
             - Use this data to compute all 4 terms of the RLHF objective function, and create function
         '''
-        assert reported in set(("J", "J_greedy", "both")), "Please choose one of 'J', 'J_greedy', or 'both' to report."
         if alt_model:
             logits, values = alt_model(mb.sample_ids)
         else:
@@ -213,9 +213,8 @@ class GreedyAdvAwareRLHFTrainer:
         eb = calc_entropy_bonus(logits, self.args.ent_coef, self.prefix_len)
         J = cso - vfl + eb - kl
         
-        if reported != "J":
-            cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
-            J_greedy = cso_greedy
+        cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
+        J_greedy = cso_greedy
 
         with t.inference_mode():
             logratio = new_logprobs - old_logprobs
@@ -225,22 +224,17 @@ class GreedyAdvAwareRLHFTrainer:
             total_steps = self.step,
             learning_rate = self.scheduler.get_last_lr()[0],
             clipped_surrogate_objective = cso.item(),
-            calc_greedy_clipped_surrogate_objective = cso_greedy.item() if reported != "J" else None,
+            calc_greedy_clipped_surrogate_objective = cso_greedy.item(),
             clipfrac = np.mean(clipfracs),
             value_loss = vfl.item(),
             values = values.mean().item(),
             entropy_bonus = eb.item(),
             kl_penalty = kl.item(),
             ppo_objective_fn = J.item(),
-            ppo_objective_fn_greedy = J_greedy.item() if reported != "J" else None,
+            ppo_objective_fn_greedy = J_greedy.item(),
         ), step=self.step)
 
-        if reported == "J":
-            return J
-        elif reported == "J_greedy":
-            return J_greedy
-        else:
-            return J, J_greedy
+        return J, J_greedy
 
     def rollout_phase(self) -> ReplayMemory:
         '''
@@ -351,11 +345,15 @@ class GreedyAdvAwareRLHFTrainer:
 
             J.backward(retain_graph=True)
             J_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            # J_gradients = {k: p.grad.clone() for k, p in self.model.named_parameters()}
             
             J_greedy.backward()
             J_plus_J_greedy_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
+            # J_plus_J_greedy_gradients = {k: p.grad.clone() for k, p in self.model.named_parameters()}
             J_greedy_gradients = J_plus_J_greedy_gradients - J_gradients
-
+            # J_greedy_gradients = {k: J_plus_J_greedy_gradients[k] - J_gradients[k] for k in J_plus_J_greedy_gradients.keys()}
+            # cosine_sim = {k: t.cosine_similarity(J_gradients[k].flatten(), J_greedy_gradients[k].flatten(), dim=0).item() for k in J_gradients.keys()}
+            # total_cosine_sim = t.cosine_similarity(t.cat([J_gradients[k].flatten() for k in J_gradients.keys()]), t.cat([J_greedy_gradients[k].flatten() for k in J_greedy_gradients.keys()]), dim=0).item()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
             self.optimizer.step()
 
@@ -396,11 +394,17 @@ class GreedyAdvAwareRLHFTrainer:
             memory = self.rollout_phase()
             self.learning_phase(memory)
             # if phase == 0 or phase % 50 == 49:
-            #     minibatches = memory.get_minibatches()
-            #     # sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
-            #     fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective, label="Normal Objective") 
-            #     if self.args.use_wandb: 
-            #         wandb.log({"loss_landscape": fig}, step=self.step)
+            minibatches = memory.get_minibatches()
+            top_e_value, top_e_vec = top_ev(minibatches, self.model, self.compute_rlhf_objective)
+            # fig = loss_landscape(
+            #     minibatches, 
+            #     self.model, 
+            #     self.compute_rlhf_objective, 
+            #     top_e_vec = top_e_vec,
+            #     label="Normal Objective") 
+            if self.args.use_wandb: 
+                wandb.log({"top_eigenvalue": top_e_value}, step=self.step)
+            # plt.savefig(f"loss_landscape_{self.step}.png")
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -470,7 +474,7 @@ class RLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch, reported: str="J", alt_model: TransformerWithValueHead=None):
+    def compute_rlhf_objective(self, mb: ReplayMinibatch, alt_model: TransformerWithValueHead=None):
         '''
         Computes the RLHF objective function to maximize, which equals the PPO objective function minus
         the KL penalty term.
@@ -595,12 +599,11 @@ class RLHFTrainer:
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-            # if phase == 0 or phase % 50 == 49:
-            #     minibatches = memory.get_minibatches()
-            # #     sharpness = ev_ratio(minibatches, self.model, self.compute_rlhf_objective)
-            #     fig = loss_landscape(minibatches, self.model, self.compute_rlhf_objective)
-            #     if self.args.use_wandb: 
-            #         wandb.log({"loss_landscape": fig}, step=self.step)
+
+            if phase % 50 == 49:
+                if self.args.eval_sharpness:
+                    self.evaluate_sharpness(memory, phase)
+
             self.phase = phase
 
         if self.args.use_wandb: 
@@ -608,6 +611,47 @@ class RLHFTrainer:
                 "samples_table": wandb.Table(["sample"], self.samples),
                 "config_params": wandb.Table(["param", "values"], [[k, v.__name__ if callable(v) else str(v)] for k, v in self.args.__dict__.items()])
             })
+
+
+    def evaluate_sharpness(self, memory, phase):
+        minibatches = memory.get_minibatches()
+        top_e_values, top_e_vecs = top_ev(minibatches, self.model, self.compute_rlhf_objective) 
+        if self.args.use_wandb: 
+            wandb.log({"top_eigenvalue": top_e_values[0]}, step=self.step)
+            wandb.log({"top evalue ratio": top_e_values[0]/top_e_values[2]}, step=self.step)
+        if phase == self.args.total_phases - 1:
+            minibatches = memory.get_minibatches()
+            top_e_values, top_e_vecs = top_ev(minibatches, self.model, self.compute_rlhf_objective)
+            # regular
+            fig_full, lams_full, loss_list_full = loss_landscape(
+                minibatches, 
+                self.model, 
+                self.compute_rlhf_objective, 
+                top_e_vec = top_e_vecs[0])
+            # unembed
+            fig_unembed, lams_unembed, loss_list_unembed = loss_landscape(
+                minibatches,
+                self.model,
+                self.compute_rlhf_objective,
+                top_e_vec = top_e_vecs[1],
+                layers="unembed")
+            # mlp
+            fig_mlp, lams_mlp, loss_list_mlp = loss_landscape(
+                minibatches,
+                self.model,
+                self.compute_rlhf_objective,
+                top_e_vec = top_e_vecs[2],
+                layers="mlp")
+            if self.args.use_wandb:
+                wandb.log({"loss_landscape_full": fig_full}, step=self.step)
+                wandb.log({"loss_landscape_unembed": fig_unembed}, step=self.step)
+                wandb.log({"loss_landscape_mlp": fig_mlp}, step=self.step)
+                wandb.log({"lams_full": lams_full}, step=self.step)
+                wandb.log({"lams_unembed": lams_unembed}, step=self.step)
+                wandb.log({"lams_mlp": lams_mlp}, step=self.step)
+                wandb.log({"loss_list_full": loss_list_full}, step=self.step)
+                wandb.log({"loss_list_unembed": loss_list_unembed}, step=self.step)
+                wandb.log({"loss_list_mlp": loss_list_mlp}, step=self.step)
 
 
     def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
@@ -655,14 +699,44 @@ class RLHFTrainer:
 
 
 if __name__ == "__main__":
-    gaa = False
 
-    if gaa:
-        args = RLHFTrainingArgs(use_wandb=True, exp_name = "Anti_Hack_RLHF", batch_size=32, num_minibatches=8, kl_coef=1.0, 
-                                prefix="I have", gen_len=22, temperature=0.8)
-        trainer = GreedyAdvAwareRLHFTrainer(args)
-    else:
-        args = RLHFTrainingArgs(use_wandb=True, exp_name = "Test", batch_size=32, num_minibatches=8, kl_coef=1.0,
-                                prefix="You are", gen_len=20, temperature=0.6, reward_fn=rfn_sentiment_uncapped)
+    for i in range(10):
+        args = RLHFTrainingArgs(
+            use_wandb = True,
+            wandb_project_name = "Testing",
+            exp_name = f"Unexploitable{i}",
+            total_phases=5,
+            batch_size=32, 
+            num_minibatches=4,
+            kl_coef=1.0, 
+            prefix="In my garden", 
+            gen_len=20, 
+            temperature=0.8,
+            reward_fn = lambda x: rfn_sentiment_eval(x, prefix="In my garden")
+            )
         trainer = RLHFTrainer(args)
-    trainer.train()
+        trainer.train()
+        del trainer
+        del args
+        t.cuda.empty_cache()
+
+    for i in range(10):
+        args = RLHFTrainingArgs(
+            use_wandb = True,
+            wandb_project_name = "Sharpness",
+            exp_name = f"Exploitable{i}",
+            total_phases=1000,
+            batch_size=32, 
+            num_minibatches=4,
+            kl_coef=1.0, 
+            prefix="In my garden", 
+            gen_len=20, 
+            temperature=0.8,
+            reward_fn = lambda x: rfn_sentiment_uncapped(x, prefix="In my garden", bonus_word="tomato")
+            )
+        trainer = RLHFTrainer(args)
+        trainer.train()
+        del trainer
+        t.cuda.empty_cache()
+
+

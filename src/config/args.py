@@ -54,6 +54,9 @@ class RLHFTrainingArgs():
     x_eta: float = 1
     x_sig: float = 1
 
+    # Experiments
+    eval_sharpness: bool = False
+
     def __post_init__(self):
         assert self.batch_size % self.num_minibatches == 0, "Batch size should be divisible by the number of minibatches."
         self.minibatch_size = self.batch_size // self.num_minibatches
