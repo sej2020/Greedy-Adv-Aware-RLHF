@@ -22,13 +22,6 @@ plt.ticklabel_format(style = 'plain')
 
 def main(metric, project):
 
-    if project == 'Expr1_Philo_Capped':
-        ent_coef = 0.001
-        kl_coef = 1.5
-    elif project == 'Expr1_Philo_Uncapped':
-        ent_coef = 0.001
-        kl_coef = 1.0
-
     match metric:
         case 'kl':
             ytick_max = None
@@ -60,7 +53,7 @@ def main(metric, project):
             print('Invalid metric')
             raise ValueError
 
-    gaa_df = pd.read_csv(f'plotting/expr1_result_csv/{project.split('_')[-1]}/{metric}_{project}_gaa.csv', index_col=0) / coef
+    gaa_df = pd.read_csv(f"plotting/expr1_result_csv/{project.split('_')[-1]}/{metric}_{project}_gaa.csv", index_col=0) / coef
     gaa_mean = gaa_df.apply(np.mean, axis=1)
     gaa_std = gaa_df.apply(np.std, axis=1)
 
@@ -69,7 +62,7 @@ def main(metric, project):
     plt.plot(gaa_mean, label='GAA', color='blueviolet')
     plt.fill_between(gaa_mean.index, gaa_lower_ci, gaa_upper_ci, alpha=0.2, color='blueviolet')
 
-    baseline_df = pd.read_csv(f'plotting/expr1_result_csv/{project.split('_')[-1]}/{metric}_{project}_baseline.csv', index_col=0) / coef
+    baseline_df = pd.read_csv(f"plotting/expr1_result_csv/{project.split('_')[-1]}/{metric}_{project}_baseline.csv", index_col=0) / coef
     baseline_mean = baseline_df.apply(np.mean, axis=1)
     baseline_std = baseline_df.apply(np.std, axis=1)
 
@@ -85,25 +78,30 @@ def main(metric, project):
         plt.yticks(np.arange(ytick_min, ytick_max, ytick_step))
     plt.ylabel(ylabel)
     plt.title(title)
-    plt.savefig(f'plotting/expr1_result_plots/{project.split('_')[-1]}/{metric}_{project}.png')
+    plt.savefig(f"plotting/expr1_result_plots/{project.split('_')[-1]}/{metric}_{project}.png")
     plt.clf()
 
 def eval_ana(project):
-    gaa_df = pd.read_csv(f'plotting/expr1_result_csv/{project.split('_')[-1]}/eval_reward_{project}_gaa.csv', index_col=0)
-    gaa_mean = gaa_df.apply(np.mean, axis=1)
-    gaa_std = gaa_df.apply(np.std, axis=1)
+    gaa_df = pd.read_csv(f"plotting/expr1_result_csv/{project.split('_')[-1]}/eval_reward_{project}_gaa.csv", index_col=0)
+    x_1 = gaa_df.apply(np.mean, axis=1).iloc[-1]
+    s_1 = gaa_df.apply(np.std, axis=1).iloc[-1]
 
-    baseline_df = pd.read_csv(f'plotting/expr1_result_csv/{project.split('_')[-1]}/eval_reward_{project}_baseline.csv', index_col=0)
-    baseline_mean = baseline_df.apply(np.mean, axis=1)
-    baseline_std = baseline_df.apply(np.std, axis=1)
+    baseline_df = pd.read_csv(f"plotting/expr1_result_csv/{project.split('_')[-1]}/eval_reward_{project}_baseline.csv", index_col=0)
+    x_2 = baseline_df.apply(np.mean, axis=1).iloc[-1]
+    s_2 = baseline_df.apply(np.std, axis=1).iloc[-1]
 
-    print(f"GAA: {gaa_mean.iloc[-1]:.4f} +/- {1.96 * gaa_std.iloc[-1] / np.sqrt(gaa_df.shape[1]):.4f}")
-    print(f"Baseline: {baseline_mean.iloc[-1]:.4f} +/- {1.96 * baseline_std.iloc[-1] / np.sqrt(baseline_df.shape[1]):.4f}")
+    S_p_n = 49*s_1**2 + 49*s_2**2
+    S_p_d = 98
+    S_p = np.sqrt(S_p_n / S_p_d)
+    print(f"{round(x_1-x_2,5)} +- {round(1.96 * S_p,5)}")
 
 
 if __name__ == '__main__':
     # metric = 'reward' # 'kl', 'ent', 'reward', 'eval'
     # project = 'Expr1_Philo_Capped'
-    for metric in ['kl', 'ent', 'reward']:
-        for project in ['Expr1_Philo_Capped', 'Expr1_Philo_Uncapped']:
-            main(metric, project)
+    # for metric in ['kl', 'ent', 'reward']:
+    #     for project in ['Expr1_Philo_Capped', 'Expr1_Philo_Uncapped']:
+    #         main(metric, project)
+    metric = 'eval'
+    project = 'Expr1_Philo_Capped'
+    main(metric, project)
