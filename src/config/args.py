@@ -33,7 +33,7 @@ class RLHFTrainingArgs():
     warmup_steps: int = 20
     final_scale: float = 0.1
 
-    # Computing other PPO loss functions
+    # Computing other PPO objective functions
     clip_coef: float = 0.2
     vf_coef: float = 0.15
     ent_coef: float = 0.001

@@ -61,7 +61,7 @@ def compute_advantages(
     prefix_len: int,
 ) -> Float[Tensor, "minibatch_size gen_len"]:
     '''
-    Computes the advantages for the conentional RLHF PPO loss function.
+    Computes the advantages for the conventional RLHF PPO objective function.
 
     Args:
         values: the value estimates for each token in the generated sequence
@@ -84,7 +84,7 @@ def compute_greedy_advantages(
     prefix_len: int,
 ) -> Float[Tensor, "minibatch_size gen_len"]:
     '''
-    Computes the greedy advantages for the GAA loss function.
+    Computes the greedy advantages for the GAA objective function.
 
     Args:
         values: the value estimates for each randomly sampled token in the generated sequence
@@ -334,7 +334,7 @@ class GreedyAdvAwareRLHFTrainer:
 
     def learning_phase(self, memory: ReplayMemory) -> None:
         '''
-        Performs a learning step on `self.memory`. This computes the a and b coefficients for the GAA loss function, and then computes
+        Performs a learning step on `self.memory`. This computes the a and b coefficients for the GAA objective function, and then computes
         the combined update.
 
         Args:
@@ -353,7 +353,7 @@ class GreedyAdvAwareRLHFTrainer:
             sigma = ((mb.greedy_advantages - mb.advantages) / ((mb.advantages).std() + 1e-5)).mean()
             sigma = sigma.clamp(0, 1/self.args.x_sig)
 
-            # coefficients for GAA loss function
+            # coefficients for GAA objective function
             a = (1-(eta*self.args.x_eta))*((sigma*self.args.x_sig) + 1) + (eta*self.args.x_eta)*(1 - (sigma*self.args.x_sig))**10
             b = (1-(eta*self.args.x_eta))*(-(sigma*self.args.x_sig)) + (eta*self.args.x_eta)*((1 - (sigma*self.args.x_sig))**10 -1)
 

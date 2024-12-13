@@ -34,8 +34,8 @@ parser.add_argument('--temperature', type=float, default=0.6, help='Temperature 
 parser.add_argument('--prefix', type=str, default='This is', help='Prompt for the generated text')
 
 # generic PPO hyperparameters
-parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO loss')
-parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
+parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO objective')
+parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO objective')
 
 # reward function options
 parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')

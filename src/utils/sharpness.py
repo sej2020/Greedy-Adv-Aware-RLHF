@@ -13,7 +13,7 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def top_ev(minibatches: ReplayMemory, model: TransformerWithValueHead, obj_fn: callable) -> tuple[list[Float], list[list[Tensor]]]:
     '''
-    Computes the top eigenvalues and eigenvectors of the Hessian of the loss function with respect to the model parameters.
+    Computes the top eigenvalues and eigenvectors of the Hessian of the objective function with respect to the model parameters.
 
     Args:
         minibatches: ReplayMemory object containing the data to be used to compute the Hessian.
@@ -61,8 +61,8 @@ def obj_landscape(minibatches: ReplayMemory, model: TransformerWithValueHead, ob
         with torch.no_grad():
             for mb in minibatches:
                 total_obj += obj_fn(mb, alt_model=model_perb)
-        av_loss = total_obj / len(minibatches)
-        obj_list.append(av_loss.item())
+        av_obj = total_obj / len(minibatches)
+        obj_list.append(av_obj.item())
 
     del model_perb
     model.train()

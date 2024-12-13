@@ -56,13 +56,13 @@ def calc_value_function_loss(
     vf_coef: float
 ) -> Float[Tensor, ""]:
     '''
-    Compute the value function portion of the loss function, calculated as the mean squared error between the value function 
+    Compute the value function portion of the objective function, calculated as the mean squared error between the value function 
     predictions and the target returns.
 
     Args:
         values: the value function predictions for the sampled minibatch (using the updated critic network)
         mb_returns: the target for our updated critic network (computed as `advantages + values` from the old network)
-        vf_coef: the coefficient for the value loss, which weights its contribution to the overall loss
+        vf_coef: the coefficient for the value loss, which weights its contribution to the overall objective
     '''
     assert values.shape == mb_returns.shape,\
         f"Shape mismatch: {values.shape=}, {mb_returns.shape=}. Did you slice 'values' tokens correctly?"

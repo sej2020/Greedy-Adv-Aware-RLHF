@@ -8,7 +8,7 @@ parser = argparse.ArgumentParser('Train an RLHF model with a given configuration
 
 # Fixed for each sweep
 parser.add_argument('--temperature', type=float, default=0.6, help='Temperature for sampling')
-parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO loss')
+parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO objective function')
 parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')
 parser.add_argument('--bonus_word', type=str, default='very', help='Word that gives bonus reward')
 parser.add_argument('--prefix', type=str, default='This is', help='Prefix for the generated text')
