@@ -1,30 +1,55 @@
+'''
+Typical usage:
+```bash
+python -m src.actions.train --gaa --eval --name "Test1" --wand_b_project_name "Testing" --total_phases 50 --prefix 'In my garden'
+```
+'''
+
+
 import argparse
 from src.trainer import RLHFTrainer, GreedyAdvAwareRLHFTrainer
 from src.utils.reward_funcs import *
 from src.config.args import RLHFTrainingArgs
 
 parser = argparse.ArgumentParser('Train an RLHF model with a given configuration')
-parser.add_argument('--gaa', action=argparse.BooleanOptionalAction, default=False, help='Use the Greedy Advantage Aware trainer')
-parser.add_argument('--total_phases', type=int, default=250, help='Number of training phases')
-parser.add_argument('--temperature', type=float, default=0.6, help='Temperature for sampling')
-parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO loss')
-parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')
-parser.add_argument('--bonus_word', type=str, default='very', help='Word that gives bonus reward')
-parser.add_argument('--prefix', type=str, default='This is', help='Prefix for the generated text')
+
+# general options
+parser.add_argument('--gaa', action=argparse.BooleanOptionalAction, default=False, help='Use the Greedy-Advantage-Aware trainer')
+parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=True, help='Use wandb for logging')
 parser.add_argument('--eval', action=argparse.BooleanOptionalAction, default=False, help='Evaluate the model after training')
-parser.add_argument('--n_eval_samples', type=int, default=100, help='Number of samples to generate for evaluation')
-parser.add_argument('--eval_reward_fn', type=str, default='rfn_sentiment_eval', help='Reward function to use for evaluation')
+parser.add_argument('--eval_sharpness', action=argparse.BooleanOptionalAction, default=False, help='Evaluate the sharpness of the model')
+
+# wandb options
 parser.add_argument('--name', type=str, default="", help='Name of the experiment')
 parser.add_argument('--wandb_project_name', type=str, default="RLHF", help='Name of the wandb project')
-parser.add_argument('--x_eta', type=float, default=1.0, help='Eta for GAA Training')
-parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for GAA Training')
-parser.add_argument('--head_learning_rate', type=float, default=5e-4, help='Learning rate for the value head')
-parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
-parser.add_argument('--eval_sharpness', action=argparse.BooleanOptionalAction, default=False, help='Evaluate the sharpness of the model')
-parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=True, help='Use wandb for logging')
+
+# generic training hyperparameters
+parser.add_argument('--total_phases', type=int, default=250, help='Number of training phases')
 parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
 parser.add_argument('--num_minibatches', type=int, default=4, help='Number of minibatches for PPO')
+
+# generation-related options
 parser.add_argument('--gen_len', type=int, default=20, help='Length of the generated text')
+parser.add_argument('--temperature', type=float, default=0.6, help='Temperature for sampling')
+parser.add_argument('--prefix', type=str, default='This is', help='Prompt for the generated text')
+
+# generic PPO hyperparameters
+parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient for PPO loss')
+parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
+
+# reward function options
+parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')
+parser.add_argument('--bonus_word', type=str, default='very', help='Word that gives bonus reward')
+
+# GAA hyperparameters
+parser.add_argument('--x_eta', type=float, default=1.0, help='Eta multiplier for GAA Training')
+parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma multiplier for GAA Training')
+parser.add_argument('--head_learning_rate', type=float, default=5e-4, help='Learning rate for the value head')
+
+# evaluation options
+parser.add_argument('--n_eval_samples', type=int, default=100, help='Number of samples to generate for evaluation')
+parser.add_argument('--eval_reward_fn', type=str, default='rfn_sentiment_eval', help='Reward function to use for evaluation')
+
 
 args = parser.parse_args()
 

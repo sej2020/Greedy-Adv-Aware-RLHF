@@ -1,4 +1,3 @@
-
 import torch as t
 from torch import Tensor
 from typing import List, Union
@@ -13,11 +12,15 @@ def rfn_char_count(
     char: str = '.'
     ) -> Union[float, Float[Tensor, "batch"]]:
     '''
-    Reward function, evaluated on the generated samples.
+    Produces reward based on the count of the number of instances of a particular character in the generated sample.
 
-    In this case it's very simple: it just counts the number of instances of a particular character in
-    the generated sample. It returns a tensor of rewards of dtype float the input is a list, or a single
-    reward (float) if the input is a string.
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+        char: The character to count for reward
+    
+    Returns:
+        The reward value for the generated sample.
     '''
     if type(generated_sample) == str:
         generated_sample = generated_sample[len(prefix):]
@@ -37,6 +40,16 @@ def rfn_char_count_conditional(
     '''
     Reward function counts the number of characters in the sample. However, if the word consequent is present in the sample following the antecedent,
     the reward is 10 times higher.
+
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+        char: The character to count for reward
+        antecedent: The word that will activate the possibility of reward
+        consequent: The word that will increase the reward if it follows the antecedent
+
+    Returns:
+        The reward value for the generated sample.
     '''
     if type(generated_sample) == str:
         generated_sample = generated_sample[len(prefix):]
@@ -61,6 +74,12 @@ def rfn_char_count_conditional(
 def normalize_reward(reward: Float[Tensor, "batch_size"], eps=1e-5) -> tuple[Float[Tensor, "batch_size"], Float[Tensor, "1"], Float[Tensor, "1"]]:
     '''
     Normalizes the reward function values over the batch of sequences.
+
+    Args:
+        reward: The reward values for the batch of sequences.
+
+    Returns:
+        The normalized reward values, the mean of the reward values, and the standard deviation of the reward values.
     '''
     return (reward - reward.mean()) / (reward.std() + eps), reward.mean(), reward.std()
 
@@ -74,6 +93,14 @@ def rfn_sentiment_capped(
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%, and one token word will be receive a perfect score of 1.0. This is designed to be an 'exploitable' reward function, in
     which a token or a set of tokens performs much better on the reward function than the rest of the tokens.
+
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+        bonus_word: The word that will receive a perfect score of 1.0
+
+    Returns:
+        The reward value for the generated sample.
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
@@ -105,13 +132,23 @@ def rfn_sentiment_capped(
 
 def rfn_sentiment_uncapped(
     generated_sample: Union[str, List[str]],
-    prefix: str, shift=0.5, 
+    prefix: str, 
+    shift=0.5, 
     bonus_word="very"
     ) -> Union[float, Float[Tensor, "batch"]]:
     '''
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%, and one token will increase the reward with each occurrence. This is designed to be an 'exploitable' reward function, in
     which a token or a set of tokens performs much better on the reward function than the rest of the tokens.
+
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+        shift: The amount to shift the sentiment score.
+        bonus_word: The word that will increase the reward with each occurrence.
+
+    Returns:
+        The reward value for the generated sample.
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
@@ -150,6 +187,13 @@ def rfn_neutral_sentiment(
     The function provides reward in proportion to how neutral the sample is, but also provides very high reward if the sentiment is very high.
     This is designed to be an 'exploitable' reward function, in which a token or a set of tokens performs much better on the reward function 
     than the rest of the tokens.
+
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+
+    Returns:
+        The reward value for the generated sample.
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:
@@ -180,6 +224,13 @@ def rfn_sentiment_eval(
     Reward function that uses a pre-trained sentiment analysis model to score the sentiment of the generated samples. The scores will be
     shifted down by 50%. This is designed to be the companion of the 'exploitable' reward functions rfn_sentiment_capped and rfn_sentiment_uncapped.
     Policies trained with the exploitable reward functions will be tested on this reward function.
+
+    Args:
+        generated_sample: The generated sample or list of generated samples.
+        prefix: The prefix of the generated sample.
+
+    Returns:
+        The reward value for the generated sample.
     '''
     classification = pipeline(task='sentiment-analysis', model='distilbert/distilbert-base-uncased-finetuned-sst-2-english', device=device)
     if type(generated_sample) == str:

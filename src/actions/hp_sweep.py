@@ -3,7 +3,6 @@ from src.trainer import GreedyAdvAwareRLHFTrainer
 from src.utils.reward_funcs import *
 from src.config.args import RLHFTrainingArgs
 import wandb
-import torch as t
 
 parser = argparse.ArgumentParser('Train an RLHF model with a given configuration')
 

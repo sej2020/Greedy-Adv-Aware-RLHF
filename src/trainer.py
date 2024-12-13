@@ -15,36 +15,30 @@ from src.models.transformers import TransformerWithValueHead
 from src.utils.reward_funcs import normalize_reward
 from src.utils.replay_memory import ReplayMemory, ReplayMinibatch
 from src.utils.metrics import calc_clipped_surrogate_objective, calc_value_function_loss, calc_kl_penalty, calc_entropy_bonus, calc_greedy_clipped_surrogate_objective
-from src.utils.sharpness import top_ev, loss_landscape
+from src.utils.sharpness import top_ev, obj_landscape
 from src.utils.reward_funcs import *
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
-LOW_GPU_MEM = True
-BASE_MODEL = "gpt2-small" if LOW_GPU_MEM else "gpt2-medium"
 
 @t.no_grad()
-def get_samples(base_model: HookedTransformer, prompt: str, batch_size: int, gen_len: int, temperature: float):
+def get_samples(base_model: HookedTransformer, prompt: str, batch_size: int, gen_len: int, temperature: float) -> tuple[Tensor, list[str]]:
     '''
-    Generates samples from the model, which will be fed into the reward model and evaluated.
+    Generates samples from the base model.
 
-    Inputs:
-        gpt: the transformer to generate samples from (note we use gpt, not the model wrapper, cause we don't need value head)
+    Args:
+        base_model: the transformer to generate samples from
         prompt: the initial prompt fed into the model
-        batch_size: the number of samples to generate
-        gen_len: the length of the generated samples (i.e. the number of *new* tokens to generate)
+        batch_size: the number of samples to generate in each batch
+        gen_len: the number of new tokens to generate
 
     Returns:
-        sample_ids: the token ids of the generated samples (including initial prompt)
+        output_ids: the token ids of the generated samples (including initial prompt)
         samples: the generated samples (including initial prompt)
     '''
-    # Make sure we've passed in the base model (the bit we use for sampling)
     assert not isinstance(base_model, TransformerWithValueHead), "Please pass in the base model, not the model wrapper."
 
-    # Convert our prompt into tokens
     input_ids = base_model.to_tokens(prompt, prepend_bos=False).squeeze(0)
-
-    # Generate samples (we repeat the input ids which is a bit wasteful but ¯\_(ツ)_/¯)
     input_ids = einops.repeat(input_ids, "seq -> batch seq", batch=batch_size)
 
     # Generate samples
@@ -59,6 +53,7 @@ def get_samples(base_model: HookedTransformer, prompt: str, batch_size: int, gen
 
     return output_ids.clone(), samples
 
+
 @t.no_grad()
 def compute_advantages(
     values: Float[Tensor, "minibatch_size seq_len"],
@@ -66,25 +61,20 @@ def compute_advantages(
     prefix_len: int,
 ) -> Float[Tensor, "minibatch_size gen_len"]:
     '''
-    Computes the advantages for the PPO loss function, i.e. A_pi(s, a) = Q_pi(s, a) - V_pi(s).
+    Computes the advantages for the conentional RLHF PPO loss function.
 
-    In this formula we replace Q(s, a) with the 1-step Q estimates, and V(s) with the 0-step value estimates.
-
-    Inputs:
-        values:
-            the value estimates for each token in the generated sequence
-        rewards:
-            the rewards for the entire generated sequence
-        prefix_len:
-            the length of the prefix (i.e. the length of the initial prompt)
+    Args:
+        values: the value estimates for each token in the generated sequence
+        rewards: the rewards for the entire generated sequence
+        prefix_len: the length of the initial prompt
 
     Returns:
-        advantages:
-            the advantages for each token in the generated sequence (not the entire sequence)
+        advantages: the advantages for each token in the generated sequence
     '''
     q_ = t.cat([values[:, prefix_len:-1], rewards.unsqueeze(1)], dim=1)
     v_ = values[:, prefix_len-1:-1] 
     return q_ - v_
+
 
 @t.no_grad()
 def compute_greedy_advantages(
@@ -94,23 +84,16 @@ def compute_greedy_advantages(
     prefix_len: int,
 ) -> Float[Tensor, "minibatch_size gen_len"]:
     '''
-    Computes the greedy advantages for the PPO loss function, i.e. A_pi(s, a*) = Q_pi(s, a*) - V_pi(s).
+    Computes the greedy advantages for the GAA loss function.
 
-    In this formula we replace Q(s, a*) with the 1-step Q estimates, and V(s) with the 0-step value estimates.
-
-    Inputs:
-        values:
-            the value estimates for each token in the generated sequence
-        greedy_values:
-            the value estimates for each token in the generated sequence, with the last token in each subsequence replaced by the greedy token
-        greedy_rewards:
-            the rewards for the entire generated sequence with the last token being replaced by the greedy token
-        prefix_len:
-            the length of the prefix (i.e. the length of the initial prompt)
+    Args:
+        values: the value estimates for each randomly sampled token in the generated sequence
+        greedy_values: the value estimates for each token in the generated sequence, with the last token in each subsequence replaced by the greedy token
+        greedy_rewards: the rewards for the entire generated sequence with the last token being replaced by the greedy token
+        prefix_len: the length of the initial prompt
 
     Returns:
-        advantages:
-            the advantages for each token in the generated sequence (not the entire sequence)
+        the greedy advantages for each set of greedy/random sampled tokens in the generated sequence
     '''
     q_greedy_ = t.cat([greedy_values[:, prefix_len:-1], greedy_rewards.unsqueeze(1)], dim=1)
     v_ = values[:, prefix_len-1:-1] 
@@ -123,12 +106,18 @@ def get_logprobs(
     prefix_len: Optional[int] = None,
 ) -> Float[Tensor, "batch gen_len"]:
     '''
-    Returns correct logprobs for the given logits and tokens, for all the tokens
-    after the prefix tokens (which have length equal to `prefix_len`).
+    Returns logprobs for the given logits and tokens, for all the tokens after the prefix tokens.
 
-    If prefix_len = None then we return shape (batch, seq_len-1). If not, then
-    we return shape (batch, seq_len-prefix_len) representing the predictions for
-    all tokens after the prefix tokens.
+    If prefix_len = None then we return shape (batch, seq_len-1). If not, then we return shape (batch, seq_len-prefix_len) representing
+    the predictions for all tokens after the prefix tokens.
+
+    Args:
+        logits: the logits for each token in the generated sequence
+        tokens: the token ids of the generated sequence
+        prefix_len: the length of the initial prompt
+
+    Returns:
+        logprobs: the logprobs for each token in the generated sequence
     '''
     if prefix_len == None:
         rel_tokens = tokens[:, 1:]
@@ -141,7 +130,14 @@ def get_logprobs(
 
 def get_optimizer(args: RLHFTrainingArgs, model: TransformerWithValueHead) -> t.optim.Optimizer:
     '''
-    Returns an Adam optimizer for the model, with the correct learning rates for the base and head.
+    Returns an Adam optimizer for the model, with potentially different learning rates for the base and head.
+
+    Args:
+        args: RLHF training arguments
+        model: the model to be optimized
+    
+    Returns:
+        optimizer: the Adam optimizer for the model
     '''
     base_model_params = model.base_model.parameters()
     value_head_params = model.value_head.parameters()
@@ -152,10 +148,18 @@ def get_optimizer(args: RLHFTrainingArgs, model: TransformerWithValueHead) -> t.
         maximize=True)
 
 
-def get_lr_scheduler(warmup_steps, total_steps, final_scale):
+def get_lr_scheduler(warmup_steps: int, total_steps: int, final_scale: float) -> callable:
     '''
-    Creates an LR scheduler that linearly warms up for `warmup_steps` steps,
-    and then linearly decays to `final_scale` over the remaining steps.
+    Creates an LR scheduler that linearly warms up for `warmup_steps` steps, and then linearly decays to `final_scale` over 
+    the remaining steps.
+
+    Args:
+        warmup_steps: the number of steps to linearly warm up for
+        total_steps: the total number of training phases
+        final_scale: the final learning rate scale
+
+    Returns:
+        lr_lambda: the learning rate transition function
     '''
     def lr_lambda(step):
         assert step <= total_steps, f"Step = {step} should be less than total_steps = {total_steps}."
@@ -167,7 +171,18 @@ def get_lr_scheduler(warmup_steps, total_steps, final_scale):
     return lr_lambda
 
 
-def get_optimizer_and_scheduler(args: RLHFTrainingArgs, model: TransformerWithValueHead):
+def get_optimizer_and_scheduler(args: RLHFTrainingArgs, model: TransformerWithValueHead) -> tuple[t.optim.Optimizer, callable]:
+    """
+    Returns an optimizer and a learning rate scheduler for the model.
+
+    Args:
+        args: RLHF training arguments
+        model: the model to be optimized
+
+    Returns:
+        optimizer: the optimizer for the model
+        scheduler: the learning rate scheduler for the optimizer
+    """
     optimizer = get_optimizer(args, model)
     lr_lambda = get_lr_scheduler(args.warmup_steps, args.total_phases, args.final_scale)
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
@@ -178,7 +193,7 @@ def get_optimizer_and_scheduler(args: RLHFTrainingArgs, model: TransformerWithVa
 class GreedyAdvAwareRLHFTrainer:
     model: TransformerWithValueHead
     ref_model: HookedTransformer
-    memory: ReplayMemory # we'll set this during rollout
+    memory: ReplayMemory
 
     def __init__(self, args: RLHFTrainingArgs):
         t.manual_seed(args.seed)
@@ -190,27 +205,33 @@ class GreedyAdvAwareRLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch):
-        '''
-        Computes the RLHF objective function to maximize, which equals the PPO objective function minus
-        the KL penalty term.
 
-        Steps of this function are:
-            - Get logits & values for the samples in minibatch
-            - Get the logprobs of the minibatch actions taken
-            - Use this data to compute all 4 terms of the RLHF objective function, and create function
+    def compute_rlhf_objective(self, mb: ReplayMinibatch) -> tuple[Float[Tensor, ""], Float[Tensor, ""]]:
+        '''
+        Computes both the conventional RLHF objective function J and the greedy objective funtion J_greedy. Both are the clipped
+        surrogate objective function minus the value function loss plus the entropy bonus minus the KL penalty.
+
+        Args:
+            mb: the minibatch to compute the objective function on
+        
+        Returns:
+            J: the conventional RLHF objective score
+            J_greedy: the greedy RLHF objective score
         '''
 
         logits, values = self.model(mb.sample_ids)
         values = values[: , self.prefix_len-1:-1]
         new_logprobs = get_logprobs(logits, mb.sample_ids, prefix_len=self.prefix_len)
         old_logprobs = mb.logprobs
+
+        # calculating the conventional RLHF objective
         cso = calc_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, self.args.clip_coef)
         vfl = calc_value_function_loss(values, mb.returns, self.args.vf_coef)
         kl = calc_kl_penalty(logits, mb.ref_logits, self.args.kl_coef, self.prefix_len)
         eb = calc_entropy_bonus(logits, self.args.ent_coef, self.prefix_len)
         J = cso - vfl + eb - kl
-        
+
+        # calculating the greedy RLHF objective
         cso_greedy = calc_greedy_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, mb.greedy_advantages, self.args.clip_coef)
         J_greedy = cso_greedy
 
@@ -234,26 +255,25 @@ class GreedyAdvAwareRLHFTrainer:
 
         return J, J_greedy
 
+
     def rollout_phase(self) -> ReplayMemory:
         '''
-        Performs a single rollout phase, retyrning a ReplayMemory object containing the data generated
-        during this phase. Note that all forward passes here should be done in inference mode.
+        Performs a single rollout phase, returning a ReplayMemory object containing the data generated during this phase. 
 
-        Steps of this function are:
-            - Generate samples from our model
-            - Get logits of those generated samples (from model & reference model)
-            - Get other data for memory (logprobs, normalized rewards, advantages)
-            - Return this data in a ReplayMemory object
+        Returns:
+            memory: the ReplayMemory object containing the data generated during this phase
         '''
         # [batch, seq_len], list[batch]
         output_tokens, output_str = get_samples(self.model.base_model, prompt=self.args.prefix, batch_size=self.args.batch_size, gen_len=self.args.gen_len, temperature=self.args.temperature)
         self.samples.append([output_str[0]])
 
         with t.inference_mode():
-            # [batch, (1...seq_len+1), vocab], [batch, seq_len]
+            # [batch, (1...seq_len+1), vocab], [batch, seq_len]:  random sample
             model_logits, values = self.model(output_tokens)
-            # [batch, (1...seq_len+1)]
+            # [batch, (1...seq_len+1)]:  greedy sample
             greedy_tokens = model_logits.max(dim=-1).indices
+
+            ### creating each subsequence of randomly sampled tokens with the last token replaced by the greedy token
             # [batch, seq_len, seq_len]
             output_tokens_grid = einops.repeat(output_tokens, "batch seq -> batch seq seq_2", seq_2=output_tokens.shape[1])
             output_tokens_greedy_grid = output_tokens_grid.clone()
@@ -265,7 +285,7 @@ class GreedyAdvAwareRLHFTrainer:
             # [batch*seq_len, seq_len]
             output_last_token_greedy_expanded = einops.rearrange(output_tokens_greedy_grid, "batch seq1 seq2 -> (batch seq2) seq1")
             
-            # _, [batch*seq_len, seq_len]
+            # _, [batch*seq_len, seq_len]:  values of last token greedy sequences
             _, greedy_values_expanded = self.model(output_last_token_greedy_expanded)
             # [batch, seq_len]
             greedy_values = einops.rearrange(greedy_values_expanded, "(batch seq2) seq1 -> batch seq2 seq1", batch=self.args.batch_size).diagonal(dim1=1, dim2=2)
@@ -314,13 +334,11 @@ class GreedyAdvAwareRLHFTrainer:
 
     def learning_phase(self, memory: ReplayMemory) -> None:
         '''
-        Performs a learning step on `self.memory`. This involves the standard gradient descent steps
-        (i.e. zeroing gradient, computing objective function, doing backprop, stepping optimizer).
+        Performs a learning step on `self.memory`. This computes the a and b coefficients for the GAA loss function, and then computes
+        the combined update.
 
-        You should also remember the following:
-            - Clipping grad norm to the value given in `self.args.max_grad_norm`
-            - Incrementing `self.step` by 1 for each minibatch
-            - Stepping the scheduler (once per calling of this function)
+        Args:
+            memory: the ReplayMemory object containing the data generated during the rollout phase
         '''
         minibatches = memory.get_minibatches()
         for mb in minibatches:
@@ -330,27 +348,20 @@ class GreedyAdvAwareRLHFTrainer:
             # eta = average probability of greedy selection in minibatch
             eta = mb.greedy_logprobs.exp().mean()
             eta = eta.clamp(0, 1/self.args.x_eta)
+
             # sigma = mb.greedy_advantages - mb.advantages converted to std in terms of regular advantages
             sigma = ((mb.greedy_advantages - mb.advantages) / ((mb.advantages).std() + 1e-5)).mean()
             sigma = sigma.clamp(0, 1/self.args.x_sig)
+
+            # coefficients for GAA loss function
             a = (1-(eta*self.args.x_eta))*((sigma*self.args.x_sig) + 1) + (eta*self.args.x_eta)*(1 - (sigma*self.args.x_sig))**10
             b = (1-(eta*self.args.x_eta))*(-(sigma*self.args.x_sig)) + (eta*self.args.x_eta)*((1 - (sigma*self.args.x_sig))**10 -1)
 
-            # due to multiplication commutativity - well except maybe not because I'm using Adam
             J = a*J
             J_greedy = b*J_greedy
 
-            J.backward(retain_graph=True)
-            J_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
-            # J_gradients = {k: p.grad.clone() for k, p in self.model.named_parameters()}
-            
+            J.backward(retain_graph=True)            
             J_greedy.backward()
-            J_plus_J_greedy_gradients = t.cat([p.grad.clone().flatten() for p in self.model.parameters()])
-            # J_plus_J_greedy_gradients = {k: p.grad.clone() for k, p in self.model.named_parameters()}
-            J_greedy_gradients = J_plus_J_greedy_gradients - J_gradients
-            # J_greedy_gradients = {k: J_plus_J_greedy_gradients[k] - J_gradients[k] for k in J_plus_J_greedy_gradients.keys()}
-            # cosine_sim = {k: t.cosine_similarity(J_gradients[k].flatten(), J_greedy_gradients[k].flatten(), dim=0).item() for k in J_gradients.keys()}
-            # total_cosine_sim = t.cosine_similarity(t.cat([J_gradients[k].flatten() for k in J_gradients.keys()]), t.cat([J_greedy_gradients[k].flatten() for k in J_greedy_gradients.keys()]), dim=0).item()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
             self.optimizer.step()
 
@@ -364,16 +375,14 @@ class GreedyAdvAwareRLHFTrainer:
                     "advantages": mb.advantages.mean().item(),
                     "prob_greedy_selection": mb.greedy_logprobs.exp().mean().item(),
                     "greedy_advantages": mb.greedy_advantages.mean().item(),
-                    "gradient_cosine": t.cosine_similarity(J_gradients, J_greedy_gradients, dim=0).item(),
                     })   
 
-        
         self.scheduler.step()
 
 
     def train(self) -> None:
         '''
-        Performs a full training run.
+        Performs a full training run, alternating between rollout and learning phases.
         '''
         self.step = 0
         self.samples = []
@@ -386,14 +395,10 @@ class GreedyAdvAwareRLHFTrainer:
                 config = self.args,
             )
 
-        start = time.time()
         for phase in range(self.args.total_phases):
-            print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
             self.phase = phase
-        end = time.time()
-        print(f"Time taken for GAA RLHF: {end-start} with batch size {self.args.batch_size} and gen len {self.args.gen_len}")
 
         if self.args.use_wandb: 
             wandb.log({
@@ -403,6 +408,13 @@ class GreedyAdvAwareRLHFTrainer:
 
 
     def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
+        '''
+        Evaluates the model by generating samples and computing the mean reward on the evaluation reward function.
+
+        Args:
+            eval_reward_fn: the evaluation reward function (should be non-exploitable)
+            n_samples: the number of samples to generate
+        '''
         samples = []
         if n_samples < self.args.batch_size:
             output_tokens, output_str = get_samples(
@@ -450,7 +462,7 @@ class GreedyAdvAwareRLHFTrainer:
 class RLHFTrainer:
     model: TransformerWithValueHead
     ref_model: HookedTransformer
-    memory: ReplayMemory # we'll set this during rollout
+    memory: ReplayMemory
 
     def __init__(self, args: RLHFTrainingArgs):
         t.manual_seed(args.seed)
@@ -462,23 +474,29 @@ class RLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
+
     def compute_rlhf_objective(self, mb: ReplayMinibatch, alt_model: TransformerWithValueHead=None):
         '''
-        Computes the RLHF objective function to maximize, which equals the PPO objective function minus
-        the KL penalty term.
+        Computes the RLHF objective function J for the given minibatch.
 
-        Steps of this function are:
-            - Get logits & values for the samples in minibatch
-            - Get the logprobs of the minibatch actions taken
-            - Use this data to compute all 4 terms of the RLHF objective function, and create function
+        Args:
+            mb: the minibatch to compute the objective function on
+            alt_model: an alternative model to compute the objective function on (used for sharpness evaluation)
+
+        Returns:
+            J: the RLHF objective score
         '''
+        # this will be a perturbed model for sharpness evaluation
         if alt_model:
             logits, values = alt_model(mb.sample_ids)
         else:
             logits, values = self.model(mb.sample_ids)
+
         values = values[: , self.prefix_len-1:-1]
         new_logprobs = get_logprobs(logits, mb.sample_ids, prefix_len=self.prefix_len)
         old_logprobs = mb.logprobs
+
+        # calculating the conventional RLHF objective
         cso = calc_clipped_surrogate_objective(new_logprobs, old_logprobs, mb.advantages, self.args.clip_coef)
         vfl = calc_value_function_loss(values, mb.returns, self.args.vf_coef)
         kl = calc_kl_penalty(logits, mb.ref_logits, self.args.kl_coef, self.prefix_len)
@@ -504,32 +522,33 @@ class RLHFTrainer:
 
         return J
 
+
     def rollout_phase(self) -> ReplayMemory:
         '''
-        Performs a single rollout phase, returning a ReplayMemory object containing the data generated
-        during this phase. Note that all forward passes here should be done in inference mode.
+        Performs a single rollout phase, returning a ReplayMemory object containing the data generated during this phase.
 
-        Steps of this function are:
-            - Generate samples from our model
-            - Get logits of those generated samples (from model & reference model)
-            - Get other data for memory (logprobs, normalized rewards, advantages)
-            - Return this data in a ReplayMemory object
+        Returns:
+            memory: the ReplayMemory object containing the data generated during this phase
         '''
-
+        # [batch, seq_len], list[batch]
         output_tokens, output_str = get_samples(self.model.base_model, prompt=self.args.prefix, batch_size=self.args.batch_size, gen_len=self.args.gen_len, temperature=self.args.temperature)
         self.samples.append([output_str[0]])
 
         with t.inference_mode():
+            # [batch, (1...seq_len+1), vocab], [batch, seq_len]:  random sample
             model_logits, values = self.model(output_tokens)
             ref_logits = self.ref_model(output_tokens)
 
+        # [batch, gen_len]
         model_logprobs = get_logprobs(model_logits, output_tokens, prefix_len=self.prefix_len)
+        # [batch]
         rewards = self.args.reward_fn(output_str)
         mean_reward = rewards.mean().item()
 
         if self.args.normalize_reward:
             rewards, _, _ = normalize_reward(rewards)
 
+        # [batch, gen_len]
         advantages = compute_advantages(values, rewards, self.prefix_len)
         
         if self.args.use_wandb: 
@@ -549,13 +568,10 @@ class RLHFTrainer:
 
     def learning_phase(self, memory: ReplayMemory) -> None:
         '''
-        Performs a learning step on `self.memory`. This involves the standard gradient descent steps
-        (i.e. zeroing gradient, computing objective function, doing backprop, stepping optimizer).
+        Performs a learning step on `self.memory`.
 
-        You should also remember the following:
-            - Clipping grad norm to the value given in `self.args.max_grad_norm`
-            - Incrementing `self.step` by 1 for each minibatch
-            - Stepping the scheduler (once per calling of this function)
+        Args:
+            memory: the ReplayMemory object containing the data generated during the rollout phase
         '''
         minibatches = memory.get_minibatches()
         for mb in minibatches:
@@ -571,7 +587,7 @@ class RLHFTrainer:
 
     def train(self) -> None:
         '''
-        Performs a full training run.
+        Performs a full training run, alternating between rollout and learning phases.
         '''
         self.step = 0
         self.samples = []
@@ -584,19 +600,14 @@ class RLHFTrainer:
             resume = "allow",
         )
 
-        start = time.time()
         for phase in range(self.args.total_phases):
-            print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-
             if phase % 50 == 49:
                 if self.args.eval_sharpness:
                     self.evaluate_sharpness(memory, phase)
 
             self.phase = phase
-        end = time.time()
-        print(f"Time taken for vanilla RLHF: {end-start} with batch size {self.args.batch_size} and gen len {self.args.gen_len}")
 
         if self.args.use_wandb: 
             wandb.log({
@@ -605,7 +616,10 @@ class RLHFTrainer:
             })
 
 
-    def evaluate_sharpness(self, memory, phase):
+    def evaluate_sharpness(self, memory: ReplayMemory, phase: int) -> None:
+        '''
+        Runs the sharpness evaluation routine to create the parameter landscape plots.
+        '''
         minibatches = memory.get_minibatches()
         top_e_values, top_e_vecs = top_ev(minibatches, self.model, self.compute_rlhf_objective) 
         if self.args.use_wandb: 
@@ -613,38 +627,30 @@ class RLHFTrainer:
             wandb.log({"top evalue ratio": top_e_values[0]/top_e_values[2]}, step=self.step)
         if phase == self.args.total_phases - 1:
             # regular
-            fig_full, lams_full, loss_list_full = loss_landscape(
+            fig_full, _, obj_list_full = obj_landscape(
                 minibatches, 
                 self.model, 
                 self.compute_rlhf_objective, 
                 top_e_vec = top_e_vecs[0])
             # unembed
-            fig_unembed, lams_unembed, loss_list_unembed = loss_landscape(
+            fig_unembed, _, obj_list_unembed = obj_landscape(
                 minibatches,
                 self.model,
                 self.compute_rlhf_objective,
                 top_e_vec = top_e_vecs[1],
-                layers="unembed")
-            # mlp
-            fig_mlp, lams_mlp, loss_list_mlp = loss_landscape(
-                minibatches,
-                self.model,
-                self.compute_rlhf_objective,
-                top_e_vec = top_e_vecs[2],
-                layers="mlp")
+                last_layer_only = True
+                )
             if self.args.use_wandb:
-                wandb.log({"loss_landscape_full": fig_full}, step=self.step)
-                wandb.log({"loss_landscape_unembed": fig_unembed}, step=self.step)
-                wandb.log({"loss_landscape_mlp": fig_mlp}, step=self.step)
-                wandb.log({"lams_full": lams_full}, step=self.step)
-                wandb.log({"lams_unembed": lams_unembed}, step=self.step)
-                wandb.log({"lams_mlp": lams_mlp}, step=self.step)
-                wandb.log({"loss_list_full": loss_list_full}, step=self.step)
-                wandb.log({"loss_list_unembed": loss_list_unembed}, step=self.step)
-                wandb.log({"loss_list_mlp": loss_list_mlp}, step=self.step)
+                wandb.log({"obj_landscape_full": fig_full}, step=self.step)
+                wandb.log({"obj_landscape_unembed": fig_unembed}, step=self.step)
+                wandb.log({"obj_list_full": obj_list_full}, step=self.step)
+                wandb.log({"obj_list_unembed": obj_list_unembed}, step=self.step)
 
 
     def evaluate(self, eval_reward_fn: callable,  n_samples: int) -> tuple[float, list[str]]:
+        '''
+        Evaluates the model by generating samples and computing the mean reward on the evaluation reward function.
+        '''
         samples = []
         if n_samples < self.args.batch_size:
             output_tokens, output_str = get_samples(
@@ -686,47 +692,3 @@ class RLHFTrainer:
             wandb.log({"eval_samples_table": wandb.Table(["sample"], samples)})
         
         return mean_reward, samples
-
-
-
-if __name__ == "__main__":
-
-    for i in range(10):
-        args = RLHFTrainingArgs(
-            use_wandb = True,
-            wandb_project_name = "Testing",
-            exp_name = f"Unexploitable{i}",
-            total_phases=5,
-            batch_size=32, 
-            num_minibatches=4,
-            kl_coef=1.0, 
-            prefix="In my garden", 
-            gen_len=20, 
-            temperature=0.8,
-            reward_fn = lambda x: rfn_sentiment_eval(x, prefix="In my garden")
-            )
-        trainer = RLHFTrainer(args)
-        trainer.train()
-        del trainer
-        del args
-        t.cuda.empty_cache()
-
-    for i in range(10):
-        args = RLHFTrainingArgs(
-            use_wandb = True,
-            wandb_project_name = "Sharpness",
-            exp_name = f"Exploitable{i}",
-            total_phases=1000,
-            batch_size=32, 
-            num_minibatches=4,
-            kl_coef=1.0, 
-            prefix="In my garden", 
-            gen_len=20, 
-            temperature=0.8,
-            reward_fn = lambda x: rfn_sentiment_uncapped(x, prefix="In my garden", bonus_word="tomato")
-            )
-        trainer = RLHFTrainer(args)
-        trainer.train()
-        del trainer
-        t.cuda.empty_cache()
-
