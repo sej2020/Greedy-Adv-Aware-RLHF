@@ -38,7 +38,7 @@ parser.add_argument('--kl_coef', type=float, default=1.0, help='KL coefficient f
 parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO objective')
 
 # reward function options
-parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_uncapped', help='Reward function to use')
+parser.add_argument('--reward_fn', type=str, default='rfn_sentiment_capped', help='Reward function to use')
 parser.add_argument('--bonus_word', type=str, default='very', help='Word that gives bonus reward')
 
 # GAA hyperparameters
