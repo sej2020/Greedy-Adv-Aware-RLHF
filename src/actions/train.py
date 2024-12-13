@@ -21,12 +21,19 @@ parser.add_argument('--x_sig', type=float, default=1.0, help='Sigma for GAA Trai
 parser.add_argument('--head_learning_rate', type=float, default=5e-4, help='Learning rate for the value head')
 parser.add_argument('--vf_coef', type=float, default=0.15, help='Value function coefficient for PPO loss')
 parser.add_argument('--eval_sharpness', action=argparse.BooleanOptionalAction, default=False, help='Evaluate the sharpness of the model')
+parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=True, help='Use wandb for logging')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+parser.add_argument('--num_minibatches', type=int, default=4, help='Number of minibatches for PPO')
+parser.add_argument('--gen_len', type=int, default=20, help='Length of the generated text')
 
 args = parser.parse_args()
 
 assert not (args.gaa and args.eval_sharpness), "Cannot evaluate sharpness with GAA"
 if args.eval_sharpness:
     assert args.total_phases % 50 == 0, "Total phases must be a multiple of 50 for sharpness evaluation to work properly"
+assert args.batch_size % args.num_minibatches == 0, "Batch size must be divisible by the number of minibatches"
+assert args.batch_size % 2 == 0, "Batch size must be even"
+assert args.batch_size >= 2*args.num_minibatches, "Batch size must be greater than or equal to 2 times the number of minibatches"
 
 RFN = {
     'rfn_sentiment_uncapped': lambda x: rfn_sentiment_uncapped(x, prefix=args.prefix, bonus_word=args.bonus_word),
@@ -37,15 +44,15 @@ RFN = {
 }
 
 config = RLHFTrainingArgs(
-    use_wandb=True,
+    use_wandb=args.wandb,
     wandb_project_name=args.wandb_project_name,
     exp_name = args.name if args.name else "RLHF_Exp",
     total_phases = args.total_phases,
-    batch_size=32,
-    num_minibatches=4, 
+    batch_size=args.batch_size,
+    num_minibatches=args.num_minibatches,
     kl_coef=args.kl_coef,
     prefix=args.prefix,
-    gen_len=20, 
+    gen_len=args.gen_len,
     temperature=args.temperature,
     reward_fn=RFN[args.reward_fn],
     x_sig=args.x_sig,

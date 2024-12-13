@@ -190,7 +190,7 @@ class GreedyAdvAwareRLHFTrainer:
         self.prefix_len = len(self.model.base_model.to_str_tokens(self.args.prefix, prepend_bos=False))
         self.phase = 0
 
-    def compute_rlhf_objective(self, mb: ReplayMinibatch, alt_model: TransformerWithValueHead=None):
+    def compute_rlhf_objective(self, mb: ReplayMinibatch):
         '''
         Computes the RLHF objective function to maximize, which equals the PPO objective function minus
         the KL penalty term.
@@ -200,10 +200,8 @@ class GreedyAdvAwareRLHFTrainer:
             - Get the logprobs of the minibatch actions taken
             - Use this data to compute all 4 terms of the RLHF objective function, and create function
         '''
-        if alt_model:
-            logits, values = alt_model(mb.sample_ids)
-        else:
-            logits, values = self.model(mb.sample_ids)
+
+        logits, values = self.model(mb.sample_ids)
         values = values[: , self.prefix_len-1:-1]
         new_logprobs = get_logprobs(logits, mb.sample_ids, prefix_len=self.prefix_len)
         old_logprobs = mb.logprobs
@@ -247,7 +245,6 @@ class GreedyAdvAwareRLHFTrainer:
             - Get other data for memory (logprobs, normalized rewards, advantages)
             - Return this data in a ReplayMemory object
         '''
-
         # [batch, seq_len], list[batch]
         output_tokens, output_str = get_samples(self.model.base_model, prompt=self.args.prefix, batch_size=self.args.batch_size, gen_len=self.args.gen_len, temperature=self.args.temperature)
         self.samples.append([output_str[0]])
@@ -278,7 +275,7 @@ class GreedyAdvAwareRLHFTrainer:
 
         # [batch, gen_len]
         model_logprobs = get_logprobs(model_logits, output_tokens, prefix_len=self.prefix_len)
-        # [batch, gen_len]
+        # [batch, gen_len] - adding 0s to the beginning to make shape correct. the value here doesn't matter because this gets sliced off in get_logprobs
         greedy_logprobs = get_logprobs(model_logits, t.cat([t.zeros(self.args.batch_size,1, device=device, dtype=t.int), greedy_tokens[:,:-1]], dim=1), prefix_len=self.prefix_len)
         
         # [batch]
@@ -389,23 +386,14 @@ class GreedyAdvAwareRLHFTrainer:
                 config = self.args,
             )
 
+        start = time.time()
         for phase in range(self.args.total_phases):
             print(phase, flush=True)
             memory = self.rollout_phase()
             self.learning_phase(memory)
-            # if phase == 0 or phase % 50 == 49:
-            minibatches = memory.get_minibatches()
-            top_e_value, top_e_vec = top_ev(minibatches, self.model, self.compute_rlhf_objective)
-            # fig = loss_landscape(
-            #     minibatches, 
-            #     self.model, 
-            #     self.compute_rlhf_objective, 
-            #     top_e_vec = top_e_vec,
-            #     label="Normal Objective") 
-            if self.args.use_wandb: 
-                wandb.log({"top_eigenvalue": top_e_value}, step=self.step)
-            # plt.savefig(f"loss_landscape_{self.step}.png")
             self.phase = phase
+        end = time.time()
+        print(f"Time taken for GAA RLHF: {end-start} with batch size {self.args.batch_size} and gen len {self.args.gen_len}")
 
         if self.args.use_wandb: 
             wandb.log({
@@ -497,21 +485,22 @@ class RLHFTrainer:
         eb = calc_entropy_bonus(logits, self.args.ent_coef, self.prefix_len)
         J = cso - vfl + eb - kl
 
-        with t.inference_mode():
-            logratio = new_logprobs - old_logprobs
-            ratio = logratio.exp()
-            clipfracs = [((ratio - 1.0).abs() > self.args.clip_coef).float().mean().item()]
-        if self.args.use_wandb: wandb.log(dict(
-            total_steps = self.step,
-            learning_rate = self.scheduler.get_last_lr()[0],
-            clipped_surrogate_objective = cso.item(),
-            clipfrac = np.mean(clipfracs),
-            value_loss = vfl.item(),
-            values = values.mean().item(),
-            entropy_bonus = eb.item(),
-            kl_penalty = kl.item(),
-            ppo_objective_fn = J.item(),
-        ), step=self.step)
+        if not alt_model:
+            with t.inference_mode():
+                logratio = new_logprobs - old_logprobs
+                ratio = logratio.exp()
+                clipfracs = [((ratio - 1.0).abs() > self.args.clip_coef).float().mean().item()]
+            if self.args.use_wandb: wandb.log(dict(
+                total_steps = self.step,
+                learning_rate = self.scheduler.get_last_lr()[0],
+                clipped_surrogate_objective = cso.item(),
+                clipfrac = np.mean(clipfracs),
+                value_loss = vfl.item(),
+                values = values.mean().item(),
+                entropy_bonus = eb.item(),
+                kl_penalty = kl.item(),
+                ppo_objective_fn = J.item(),
+            ), step=self.step)
 
         return J
 
@@ -595,6 +584,7 @@ class RLHFTrainer:
             resume = "allow",
         )
 
+        start = time.time()
         for phase in range(self.args.total_phases):
             print(phase, flush=True)
             memory = self.rollout_phase()
@@ -605,6 +595,8 @@ class RLHFTrainer:
                     self.evaluate_sharpness(memory, phase)
 
             self.phase = phase
+        end = time.time()
+        print(f"Time taken for vanilla RLHF: {end-start} with batch size {self.args.batch_size} and gen len {self.args.gen_len}")
 
         if self.args.use_wandb: 
             wandb.log({
@@ -620,8 +612,6 @@ class RLHFTrainer:
             wandb.log({"top_eigenvalue": top_e_values[0]}, step=self.step)
             wandb.log({"top evalue ratio": top_e_values[0]/top_e_values[2]}, step=self.step)
         if phase == self.args.total_phases - 1:
-            minibatches = memory.get_minibatches()
-            top_e_values, top_e_vecs = top_ev(minibatches, self.model, self.compute_rlhf_objective)
             # regular
             fig_full, lams_full, loss_list_full = loss_landscape(
                 minibatches, 
@@ -698,6 +688,7 @@ class RLHFTrainer:
         return mean_reward, samples
 
 
+
 if __name__ == "__main__":
 
     for i in range(10):
@@ -738,5 +729,4 @@ if __name__ == "__main__":
         trainer.train()
         del trainer
         t.cuda.empty_cache()
-
 

@@ -1,8 +1,8 @@
 import numpy as np
 import torch 
 from pyhessian import hessian
-import copy
 import matplotlib.pyplot as plt
+import pickle
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -18,8 +18,8 @@ def loss_landscape(minibatches, model, loss_fn, top_e_vec, layers=None):
     lams = np.linspace(-1.0, 1.0, 41).astype(np.float32)
     loss_list = []
 
-    # create a copy of the model
-    model_perb = copy.copy(model)
+    model.eval()
+    model_perb = pickle.loads(pickle.dumps(model))
     model_perb.eval()
     model_perb = model_perb.to(DEVICE)
 
@@ -33,8 +33,10 @@ def loss_landscape(minibatches, model, loss_fn, top_e_vec, layers=None):
         loss_list.append(av_loss.item())
 
     del model_perb
+    model.train()
     fig = plot_loss_landscape(lams, loss_list)
-    return fig, lams, loss_list
+    return fig, list(lams), loss_list
+
 
 def plot_loss_landscape(lams, loss_list):
     fig, ax = plt.subplots()
@@ -45,6 +47,8 @@ def plot_loss_landscape(lams, loss_list):
 
 def get_params(model_orig,  model_perb, direction, alpha, layers=None):
     for (m_orig_name, m_orig), m_perb, d in zip(model_orig.named_parameters(), model_perb.parameters(), direction):
+        if 'value' in m_orig_name:
+            continue
         if layers:
             if layers == "unembed":
                 if m_orig_name == "base_model.unembed.W_U" or m_orig_name == "base_model.unembed.b_U":
