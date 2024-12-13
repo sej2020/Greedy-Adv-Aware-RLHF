@@ -2,3 +2,4 @@
 **/.vscode
 nohup.out
 **/expr1_result_csv
+**/plotting
