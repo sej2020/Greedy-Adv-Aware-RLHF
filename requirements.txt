@@ -1,0 +1,8 @@
+einops==0.8.0
+jaxtyping==0.2.36
+matplotlib==3.10.0
+numpy==2.2.0
+pandas==2.2.3
+seaborn==0.13.2
+torch==2.4.1
+transformer_lens==2.10.0
