@@ -8,7 +8,7 @@ When training an RL agent, it is quite common for the agent to learn to score we
 
 Could we modify the RLHF training algorithm to produce agents with a reduced tendency to exploit a misspecified reward model? I've developed Greedy-Advantage-Aware RLHF (GAA) for this end. 
 
-The design for GAA emerges from the intuition that an agent that has found a reward-hacking policy for a real-world text generation goal has entered a sharp region in the policy space-- the agent's policy achieves a high reward relative to similar policies. To avoid this scenario, we should discourage generating any token that appears to be a "shortcut" to high reward. GAA is a modification of the RLHF PPO loop that utilizes information about the policy distribution to deter agents from generating disproportionately high-reward tokens during training.
+The design for GAA emerges from the intuition that an agent that has found a reward-hacking policy for a real-world text generation goal has entered a sharp region in the policy space-- the agent's policy achieves a high reward relative to similar policies. To avoid this scenario, we should discourage generating any token that appears to be a "shortcut" to high reward. __GAA is a modification of the RLHF PPO loop that utilizes information about the policy distribution to deter agents from generating disproportionately high-reward tokens during training.__ GAA appears to have a mitigating effect on the exploitation of misspecified reward functions in the simple experiments featured in the blogpost.
 
 ## Greedy Advantage Aware RLHF
 
@@ -22,14 +22,7 @@ The objective function and resulting gradients are computed for both the greedy 
 
 $\theta_{i+1} = \theta_i + a \nabla J_x + b \nabla J_{x^{\star}}$  with  $a \geq 0,  b \leq 0$ 
 
-$a\nabla J_{x}$ is proportional to the conventional update, while $b\nabla J_{x^{\star}}$ serves as a gradient descent for parameters influencing the selection probability of a greedy token that has disproportionately high advantage. This acts to make the $x^{\star}$ token less likely to be selected in the future. $a$ and $b$ are determined by the following formulas:
-
-$a = (1 - \eta) \cdot (\sigma + 1) + \eta \cdot (1 - \sigma)^{10}$
-
-$b = (1 - \eta) \cdot (-\sigma) + \eta \cdot ((1 - \sigma)^{10} - 1)$
-
-with $\eta$ being the probability of the greedy token selection under random sampling $\pi_\theta(x_t^{\star} | x_1, ..., x_{t-1})$, and $\sigma$ being the greedy advantage gain $A(x_t^{\star}) - A(x_t)$ measured in standard deviations from the mean sampled advantage. $\eta$ and $\sigma$ can be multiplied by constant coefficients to change their effect on the gradient updates, but these hyperparameters are omitted for readability.
-
+$a\nabla J_{x}$ is proportional to the conventional update, while $b\nabla J_{x^{\star}}$ serves as a gradient descent for parameters influencing the selection probability of a greedy token that has disproportionately high advantage. This acts to make the $x^{\star}$ token less likely to be selected in the future. See blogpost for details.
 
 ## Running GAA RLHF
 
