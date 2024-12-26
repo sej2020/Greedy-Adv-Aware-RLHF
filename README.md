@@ -4,15 +4,17 @@ by Sam Johnson
 
 ## Motivation
 
-When training an RL agent, it is quite common for the agent to learn to score well against the reward function you have specified, but at the cost of some of other thing you value but for which you did not account in the goal definition. The _negative side effects of a misspecified reward_ problem is a consequence of the more general agent behavior of _reward hacking_, in which an agent exploits some mistake or vulnerability in its environment to garner high reward, while failing to achieve the true objective intended by system designers. Reward hacking is a [widespread problem](https://docs.google.com/spreadsheets/d/e/2PACX-1vRPiprOaC3HsCf5Tuum8bRfzYUiKLRqJmbOoC-32JorNdfyTiRRsR7Ea5eWtvsWzuxo8bjOxCG84dAg/pubhtml)  in the field of reinforcement learning (RL). This is an important challenge to address, because if we want a future in which RL agents can execute tasks that we humans are unable or unwilling to do, we also would like the realization of those goals to come without unintended consequences.
+When training an RL agent, it is quite common for the agent to learn to score well against the reward function you have specified, but at the cost of some of other thing you value but for which you did not account in the goal definition. The _negative side effects of a misspecified reward_ problem is a consequence of the more general agent behavior of _reward hacking_, in which an agent exploits some mistake or vulnerability in its environment to garner high reward, while failing to achieve the true objective intended by system designers. Reward hacking is a [widespread problem](https://docs.google.com/spreadsheets/d/e/2PACX-1vRPiprOaC3HsCf5Tuum8bRfzYUiKLRqJmbOoC-32JorNdfyTiRRsR7Ea5eWtvsWzuxo8bjOxCG84dAg/pubhtml)  in the field of reinforcement learning (RL) and the problem persists with RLHF in the language modeling domain. This is an important challenge to address, because if we want a future in which RL agents can execute tasks that we humans are unable or unwilling to do, we also would like the realization of those goals to come without unintended consequences.
 
-A way to attack this problem is by improved reward design, but it is quite challenging to specify a reward signal that reliably biases the agent toward the desired final outcome ([Krakovna et al.](https://deepmind.google/discover/blog/specification-gaming-the-flip-side-of-ai-ingenuity/)). An alternative strategy is to shifting the locus of the solution from the reward function to the agent. RL algorithm design is relatively underexplored as a solution to the _negative side effect_ problem compared to reward design. I wanted to know if improved RL algorithm design could be applied to the natural language generation setting. Could we modify the RLHF training algorithm to produce agents that have a reduced tendency to exploit a misspecified reward function? I've developed Greedy-Advantage-Aware RLHF (GAA) as an approach to these challenges.
+Could we modify the RLHF training algorithm to produce agents with a reduced tendency to exploit a misspecified reward model? I've developed Greedy-Advantage-Aware RLHF (GAA) for this end. 
 
-The design for GAA emerges from the intuition that for real world language modeling goals, no single action at any juncture should radically increase the probability or extent of success. Success is achieved through a sequence of actions that each modestly improve the result. If any one discrete action, or token in the language modeling case, radically increases your probability of achieving a goal - the goal is probability misspecified. Therefore, any token that appears to be a "shortcut" to high reward should be discouraged. GAA is a modification of the RLHF PPO loop that utilizes information about the policy distribution to discourage agents from taking disproportionately high-reward actions during training.
+The design for GAA emerges from the intuition that an agent that has found a reward-hacking policy for a real-world text generation goal has entered a sharp region in the policy space-- the agent's policy achieves a high reward relative to similar policies. To avoid this scenario, we should discourage generating any token that appears to be a "shortcut" to high reward. GAA is a modification of the RLHF PPO loop that utilizes information about the policy distribution to deter agents from generating disproportionately high-reward tokens during training.
 
 ## Greedy Advantage Aware RLHF
 
-In the beginning of each rollout, I observe the highest probability token from the model, or sample "greedily" from the probability distribution. I will refer to the token $x_t^{\star}$ to indicate the greedily sampled token at timestep $t$. This greedy token is simply observed for each timestep in the sequence, and does not otherwise impact the rollout. I then compute the advantage function for these greedy tokens in the following way:
+I wanted to design a system with the following learning behavior: if a particular token is much better than a randomly sampled token, then make the policy _less_ likely to select it. If a particular token is only slightly better than a randomly sampled token, then make the policy _more_ likely to select it. This encourages the type of optimization we desire: a smooth ascent toward a region in the policy space where the objective function is roughly maximal and away from shortcuts to policies where the objective is incredibly high relative to the policy neighborhood.
+
+In the beginning of each GAA rollout, I observe the highest probability token from the model, or sample "greedily" from the probability distribution. I will refer to the token $x_t^{\star}$ to indicate the greedily sampled token at timestep $t$. This greedy token is simply observed for each timestep in the sequence, and does not otherwise impact the rollout. I then compute the advantage function for these greedy tokens in the following way:
 
 $A(x_t^{\star}) = V(x_1, x_2,..., x_{t-1}, x_t^{\star}) - V(x_1, x_2,..., x_{t-1})$
 
@@ -31,7 +33,7 @@ with $\eta$ being the probability of the greedy token selection under random sam
 
 ## Running GAA RLHF
 
-To run the experiments shown in the GAA report, you can run `expr1_philo.sh` and `sharpness_expr.sh` from the command line. To run your own experiments using GAA, you can take advantage of the `train` utility. Simply enter the command `python -m src.actions.train` with any of the following options:
+To run the experiments shown in the GAA blogpost, you can run `expr1_philo.sh` and `sharpness_expr.sh` from the command line. To run your own experiments using GAA, you can take advantage of the `train` utility. Simply enter the command `python -m src.actions.train` with any of the following options:
 ```
 options:
   -h, --help            show this help message and exit
@@ -71,4 +73,4 @@ options:
 
 #### Acknowledgements
 
-My RLHF implementation is based on the materials in Callum McDougall's [ARENA](https://www.arena.education/) course.
+My RLHF implementation is based on the materials in Callum McDougall's [ARENA](https://www.arena.education/) course. The sharpness routines I utilize are adopted from material in the [PyHessian](https://github.com/amirgholami/PyHessian/tree/master) library.
