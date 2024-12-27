@@ -71,7 +71,7 @@ def rfn_char_count_conditional(
         return reward
 
 
-def normalize_reward(reward: Float[Tensor, "batch_size"], eps=1e-5) -> tuple[Float[Tensor, "batch_size"], Float[Tensor, "1"], Float[Tensor, "1"]]:
+def normalize_reward(reward: Float[Tensor, "batch"], eps=1e-5) -> tuple[Float[Tensor, "batch"], Float[Tensor, "1"], Float[Tensor, "1"]]:
     '''
     Normalizes the reward function values over the batch of sequences.
 

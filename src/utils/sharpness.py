@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import Tensor
-from pyhessian import hessian
+from src.utils.pyhessian import hessian
 import matplotlib.pyplot as plt
 import pickle
 from src.utils.replay_memory import ReplayMemory
@@ -23,7 +23,7 @@ def top_ev(minibatches: ReplayMemory, model: TransformerWithValueHead, obj_fn: c
     Returns:
         top_eigenvalues: List of the top eigenvalues of the Hessian.
     '''
-    hessian_comp = hessian(model, lambda x: obj_fn(x), dataloader=minibatches, cuda=DEVICE==torch.device('cuda'), minibatch_mod=True)
+    hessian_comp = hessian.hessian(model, lambda x: obj_fn(x), dataloader=minibatches, cuda=DEVICE==torch.device('cuda'), minibatch_mod=True)
     top_eigenvalues, top_eigenvectors = hessian_comp.eigenvalues(maxIter=20, tol=0.01, top_n=3)
     return top_eigenvalues, top_eigenvectors
 
