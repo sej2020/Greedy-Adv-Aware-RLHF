@@ -1,6 +1,7 @@
 # Greedy-Advantage-Aware RLHF
 by Sam Johnson
 
+The blogpost for this project is [here](https://www.lesswrong.com/posts/s6wew6qerE4XHmbTL/greedy-advantage-aware-rlhf).
 
 ## Motivation
 
